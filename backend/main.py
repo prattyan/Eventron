@@ -315,7 +315,7 @@ async def cache_clear():
 async def cache_stats():
     return {
         "status": "ok",
-        "size": len(cache),
+        "size": int(len(cache)),  # type: ignore[arg-type]
         "directory": cache.directory
     }
 
@@ -392,7 +392,7 @@ async def create_payment_order(request: Request):
         receipt = body.get("receipt")
         notes = body.get("notes")
 
-        order = razorpay_client.order.create({
+        order = razorpay_client.order.create({  # type: ignore[attr-defined]
             "amount": int(amount * 100),
             "currency": currency,
             "receipt": receipt,
@@ -498,7 +498,20 @@ async def data_action(action: str, request: Request):
     update: dict = body.get("update") or {}
 
     db = get_db()
-    col = db[collection_name] if collection_name else None
+    if db is None:
+        return Response(
+            content=json.dumps({"error": "Database is not available"}),
+            status_code=503,
+            media_type="application/json",
+        )
+
+    if action != "fetchBatch" and not collection_name:
+        return Response(
+            content=json.dumps({"error": f"Field 'collection' is required for action '{action}'"}),
+            status_code=400,
+            media_type="application/json",
+        )
+    col = db[collection_name or "dummy"]
 
     cache_key = f"cache:{collection_name}:{action}:{hashlib.md5(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()}"
 
@@ -509,11 +522,11 @@ async def data_action(action: str, request: Request):
 
     if action in ("insertOne", "updateOne", "updateMany", "deleteOne", "deleteMany"):
         # Invalidate all keys for this collection
-        keys_to_delete = [k for k in cache.iterkeys() if k.startswith(f"cache:{collection_name}:")]
+        keys_to_delete = [k for k in cache.iterkeys() if str(k).startswith(f"cache:{collection_name}:")]
         for k in keys_to_delete:
             cache.delete(k)
 
-    async def set_cache(data: Any):
+    def set_cache(data: Any):
         if action in ("find", "findOne"):
             cache.set(cache_key, data, expire=CACHE_TTL)
 
@@ -762,6 +775,7 @@ async def twilio_status():
 
 @app.post("/api/auth/twilio/send-otp")
 async def twilio_send_otp(request: Request):
+    phone = ""
     try:
         body = await request.json()
         raw_phone = body.get("phoneNumber")
@@ -800,14 +814,14 @@ async def twilio_send_otp(request: Request):
                 channel=channel
             )
         )
-        print(f"✅ Twilio OTP sent to {phone} via SMS (Status: {verification.status})")
+        print(f"✅ Twilio OTP sent to {phone} via {channel.upper()} (Status: {verification.status})")
 
         return {
             "success": True,
             "status": verification.status if verification else "pending",
             "phoneNumber": phone,
-            "channel": "sms",
-            "message": f"OTP sent to {phone} via SMS."
+            "channel": channel,
+            "message": f"OTP sent to {phone} via {channel.upper()}."
         }
 
     except Exception as e:
@@ -816,7 +830,8 @@ async def twilio_send_otp(request: Request):
         if "is not a valid phone number" in error_msg:
             error_msg = "Invalid phone number format. Please include your country code (e.g. +91... or +1...)."
         elif "recipient must be a verified tester" in error_msg or "is unverified" in error_msg:
-            error_msg = f"Trial Account Notice: Phone number {phone} is not a verified tester on your Twilio Trial account. Please add it to your Verified Caller IDs in the Twilio Console (Phone Numbers > Manage > Verified Caller IDs)."
+            display_phone = phone or "your phone number"
+            error_msg = f"Trial Account Notice: Phone number {display_phone} is not a verified tester on your Twilio Trial account. Please add it to your Verified Caller IDs in the Twilio Console (Phone Numbers > Manage > Verified Caller IDs)."
         elif "custom friendly name" in error_msg.lower():
             error_msg = "Twilio configuration error: Custom friendly name parameter conflict."
         return Response(
@@ -936,6 +951,13 @@ async def twilio_verify_otp(request: Request):
 
     except Exception as e:
         print(f"Twilio Verify OTP Error: {e}")
+        return Response(
+            content=json.dumps({"success": False, "message": str(e)}),
+            status_code=400,
+            media_type="application/json",
+        )
+
+
 def send_twilio_comms_email(to_email: str, otp_code: str, subject: str, html_body: str) -> bool:
     load_dotenv(override=True)
     acc_sid, auth_tok, _ = get_twilio_credentials()
@@ -1213,18 +1235,6 @@ async def verify_email_delete_otp(request: Request):
         )
 
 
-    except Exception as e:
-        print(f"Verify Email Delete OTP Error: {e}")
-        return Response(
-            content=json.dumps({"success": False, "message": str(e)}),
-            status_code=500,
-            media_type="application/json",
-        )
-
-
-combined_app = socketio.ASGIApp(sio, other_asgi_app=app)
-
-
 @app.post("/api/subscribe")
 async def subscribe_user(request: Request):
     try:
@@ -1233,7 +1243,7 @@ async def subscribe_user(request: Request):
         subscription = body.get("subscription")
 
         if not user_id or not subscription:
-            return Response(content="Missing data", status_code=400)
+            return Response(content=json.dumps({"error": "Missing data"}), status_code=400, media_type="application/json")
 
         db = get_db()
         if db is not None:
@@ -1252,7 +1262,7 @@ async def subscribe_user(request: Request):
         return {"status": "ok"}
     except Exception as e:
         print(f"Subscription error: {e}")
-        return Response(content=str(e), status_code=500)
+        return Response(content=json.dumps({"error": str(e)}), status_code=500, media_type="application/json")
 
 
 @app.post("/api/send-push")
@@ -1269,6 +1279,9 @@ async def send_push_endpoint(request: Request):
         return {"status": "queued"}
     except Exception as e:
         print(f"Send push error: {e}")
+        return Response(content=json.dumps({"error": str(e)}), status_code=500, media_type="application/json")
+
+
 # --- SPA Static Files Serving for Production / Render ---
 _FRONTEND_DIST = os.path.join(os.path.dirname(_BACKEND_DIR), "frontend", "dist")
 _ASSETS_DIR = os.path.join(_FRONTEND_DIST, "assets")
@@ -1288,6 +1301,9 @@ if os.path.exists(_FRONTEND_DIST):
         if os.path.isfile(index_file):
             return FileResponse(index_file)
         return Response(content="Eventron Frontend Not Built", status_code=404)
+
+
+combined_app = socketio.ASGIApp(sio, other_asgi_app=app)
 
 
 if __name__ == "__main__":

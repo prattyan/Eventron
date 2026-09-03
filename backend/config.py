@@ -13,8 +13,8 @@ if sys.platform == "win32":
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
 
-MONGODB_URI: str = os.getenv("MONGODB_URI", "")
-MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "event_horizon")
+MONGODB_URI: str = os.getenv("MONGODB_URI", "") or os.getenv("MONGO_URI", "")
+MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "") or os.getenv("DB_NAME", "event_horizon")
 
 ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", "")
 if not ENCRYPTION_KEY or len(ENCRYPTION_KEY) < 16:

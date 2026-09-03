@@ -111,8 +111,8 @@ async function mongoRequest(action: string, collection: string, body: any, retri
       method: 'POST',
       headers,
       body: JSON.stringify({
-        collection: collection,
-        ...body
+        ...body,
+        collection: collection || body?.collection,
       })
     });
 

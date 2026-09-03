@@ -7,6 +7,6 @@
         "backend"
     ],
     "pythonVersion": "3.11",
-    "venvPath": "c:\\Files\\Eventron\\EventHorizon",
+    "venvPath": "d:\\Eventron2\\EventHorizon",
     "venv": ".venv"
 }
