@@ -1,199 +1,231 @@
-# Eventron 
+# Eventron 🎪
 
-**Eventron** is a state-of-the-art, full-stack event management platform designed to deliver a premium experience for both organizers and attendees. Blending stunning aesthetics with powerful functionality, it offers a seamless workflow from event creation to real-time attendance tracking.
+**Eventron** is a modern, high-performance, full-stack event management and discovery platform. Built with **React 19**, **FastAPI (Python)**, and **MongoDB**, Eventron provides a seamless end-to-end experience—from AI-powered event creation and dynamic registration workflows to real-time ticketing, attendance tracking, and vector-based recommendations.
 
 ---
 
 ## ✨ Key Features
 
-### 🔐 Auth & Security
-- **Multi-Factor Authentication**: Secure login via Email/Password, Google Auth, or Phone (OTP).
-- **Account Security**: Sensitive actions like account deletion are protected by OTP verification (`recaptcha-verifier`).
-- **Role-Based Access**: Distinct portals for **Organizers** (Management) and **Attendees** (Discovery).
+### 🔐 Authentication & Security
+- **Multi-Modal Auth**: Sign in via Email/Password, Google OAuth (Firebase Auth), or Phone Number with SMS OTP (Twilio Verify).
+- **In-Transit Encryption**: End-to-end AES-256-GCM payload encryption for sensitive client-server data transfer.
+- **Role-Based Access Control (RBAC)**: Distinct permissions and views for **Attendees**, **Organizers**, and **Admins**.
+- **Rate Limiting & Security Headers**: Built-in sliding-window rate limiter and HTTP security headers (`nosniff`, `DENY`, `XSS protection`).
+- **Account Verification**: Secure OTP-protected account deletion and profile verification via Email and SMS.
 
 ### 📅 Advanced Event Management
-- **AI-Powered Creation**: Integrated **Google Gemini** to generate professional event descriptions and titles instantly.
-- **Flexible Registration Models**:
-  - **Individual**: Standard single-user registration.
-  - **Team-Based**: Create teams, generate invite codes, and manage groups.
-- **Custom Questionnaires**: Create dynamic forms with text, multiple-choice, or yes/no questions for applicants.
-- **Collaborators**: Invite other organizers to help manage specific events.
-- **Smart Dashboard**: Real-time analytics on views, registrations, and revenue.
+- **AI Content Studio**: Integrated **Google Gemini** for generating event titles, descriptions, marketing copy, and agendas.
+- **Registration Models**:
+  - **Individual**: Standard single-attendee registration with custom questionnaire support.
+  - **Team-Based**: Create teams, invite teammates via unique invite codes, and manage rosters.
+- **Collaborator Workflows**: Invite and assign co-organizers to collaborate on events.
+- **Organizer Analytics**: Real-time metrics on impressions, views, ticket sales, waitlists, and revenue.
 
-### 🎫 Attendee Experience
-- **Interactive Discovery**:
-  - **AI Recommendations**: Personalized event suggestions based on past activity.
-  - **Live Updates**: Real-time status for "Selling Fast" or "Live Now" events.
-- **Digital Ticketing**:
-  - **Holographic Tickets**: Beautiful, downloadable QR tickets.
-  - **Wallet Support**: (Planned) Integration for mobile wallets.
-- **Social Features**:
-  - **Reviews & Ratings**: Rate events and leave detailed feedback.
-  - **Team Coordination**: Join teams via unique invite codes.
+### 🎫 Attendee Experience & Discovery
+- **Vector-Based AI Recommendations**: Calculates cosine similarity across past user registrations using **Gemini text embeddings** to deliver personalized recommendations.
+- **Digital Holographic Tickets**: Downloadable, printable QR-code entry passes with attendance scanning.
+- **Payments & Promos**: Integrated **Razorpay** checkout with server-side HMAC-SHA256 signature verification and usage-limited promo codes.
+- **Social & Feedback**: Attendee reviews, star ratings, and event message boards.
 
-### 📱 Performance & Tools
-- **PWA Ready**: Installable as a native app with offline capabilities (Service Workers).
-- **Image Processing**: Built-in high-performance image cropper (`react-easy-crop`) for perfect event banners.
-- **Real-Time Sockets**: Instant notifications for approvals, new messages, and status changes via `Socket.io`.
+### ⚡ Real-Time & Communications
+- **Real-Time Sockets**: Bidirectional **Socket.io** notifications for instant event updates, registration approvals, and messages.
+- **Web Push Notifications**: Browser push notifications powered by VAPID (`pywebpush`).
+- **Omnichannel Alerts**: Automated confirmation and notification emails via SMTP and Twilio Comms.
+- **Persistent Disk Caching**: Query caching and event poster image proxy caching using **DiskCache** for low-latency delivery.
 
 ---
 
-### 🛠️ Tech Stack
+## 🛠️ Tech Stack
 
-### 🚀 Google Technologies
-- **Generative AI**: `gemini-2.5-flash` utilized for:
-  - **Content Creation**: Auto-generating marketing copy and agendas for events.
-  - **Recommender System**: Analyzing vector similarites (logic) between user history and upcoming events.
-- **Firebase**:
-  - **Authentication**: Robust identity management including Phone Auth (OTP) and Social Login (Google).
-  - **Security**: Recaptcha Verifier for persistent profile protection.
-- **Android Architecture**: Built with `@capacitor/android` for native Android APK generation.
-- **Web Vitals**: Optimized for Chrome's Core Web Vitals with PWA support (Manifest, Service Workers).
-- **Fonts**: Typography powered by **Google Fonts** (Inter & Outfit).
-
-### Frontend
-- **Framework**: [React 19](https://react.dev/) + [Vite](https://vitejs.dev/)
-- **Language**: [TypeScript](https://www.typescriptlang.org/)
-- **Styling**: [Tailwind CSS](https://tailwindcss.com/)
-- **Animations**: [Framer Motion](https://www.framer.com/motion/)
-- **State/Data**: Native React Hooks + Context
-
-### Backend & Data
-- **Proxy Server**: Node.js + Express (handles API security and routing).
-- **Database**: [MongoDB Atlas](https://www.mongodb.com/atlas) (Data API).
-- **Real-Time**: [Socket.io](https://socket.io/) (live updates for registrations/notifications).
-- **Authentication**: [Firebase Auth](https://firebase.google.com/) (Google & Email/Password).
-- **AI Engine**: [Google Gemini API](https://ai.google.dev/).
-
-
----
-
-## 🚀 Getting Started
-
-Follow these steps to set up the project locally.
-
-### Prerequisites
-1.  **Node.js**: v18.0.0 or higher.
-2.  **MongoDB Atlas**: A cloud cluster with a database named `event_horizon`.
-3.  **Firebase Project**: For Authentication.
-4.  **Gemini API Key**: From Google AI Studio.
-
-### Installation
-
-1.  **Clone the Repository**
-    ```bash
-    git clone https://github.com/your-username/event-management.git
-    cd event-management
-    ```
-
-2.  **Install Dependencies**
-    ```bash
-    npm install
-    ```
-
-3.  **Environment Setup**
-    Create a `.env` file in the root directory. Use the example below:
-
-    ```env
-    # --- Backend Configuration (Server) ---
-    PORT=5000
-    MONGODB_URI=mongodb+srv://<user>:<password>@cluster.mongodb.net/?retryWrites=true&w=majority
-    MONGODB_DB_NAME=event_horizon
-    
-    # --- AI Services ---
-    GEMINI_API_KEY=your_google_gemini_key
-
-    # --- Frontend Configuration (Vite) ---
-    # (Vite automatically loads .env files, prefixes usually not required for server vars unless exposed)
-    
-    # --- Firebase Client SDK (Put these in .env.local if you prefer) ---
-    # Note: If using Vite, you might need VITE_ prefix if accessing in client code directly
-    # OR the project might be configured to read these via process.env replacement.
-    FIREBASE_API_KEY=your_api_key
-    FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
-    FIREBASE_PROJECT_ID=your_project_id
-    FIREBASE_STORAGE_BUCKET=your_project.appspot.com
-    FIREBASE_MESSAGING_SENDER_ID=your_sender_id
-    FIREBASE_APP_ID=your_app_id
-    ```
-
-4.  **Run Development Servers**
-    This project requires both the backend and frontend to be running. We use `concurrently` to run both.
-
-    ```bash
-    npm run dev:all
-    ```
-    - **Frontend**: `http://localhost:3000`
-    - **Backend**: `http://localhost:5000`
+| Layer | Technologies |
+| :--- | :--- |
+| **Frontend** | [React 19](https://react.dev/), [TypeScript](https://www.typescriptlang.org/), [Vite](https://vitejs.dev/), [Tailwind CSS](https://tailwindcss.com/), [Framer Motion](https://www.framer.com/motion/), [Lucide React](https://lucide.dev/) |
+| **Backend** | [Python 3.11](https://www.python.org/), [FastAPI](https://fastapi.tiangolo.com/), [Uvicorn](https://www.uvicorn.org/), [python-socketio](https://python-socketio.readthedocs.io/) (ASGI) |
+| **Database** | [MongoDB Atlas](https://www.mongodb.com/atlas) via [PyMongo](https://pymongo.readthedocs.io/) with automated indexing |
+| **AI & ML** | [Google Gemini](https://ai.google.dev/) (`models/text-embedding-004` & `gemini-2.5-flash`), [NumPy](https://numpy.org/) |
+| **Auth & Third-Party** | [Firebase Auth](https://firebase.google.com/), [Twilio Verify & SMS](https://www.twilio.com/), [Razorpay](https://razorpay.com/), [DiskCache](https://grantjenks.com/docs/diskcache/) |
+| **Deployment** | [Render](https://render.com/) (Single-service unified ASGI + SPA architecture) |
 
 ---
 
 ## 📂 Project Structure
 
 ```text
-/
-├── api/                  # Serverless settings (Netlify/Vercel)
-├── components/           # Reusable React components
-│   ├── AnalyticsDashboard.tsx
-│   ├── Scanner.tsx
-│   └── ...
-├── services/             # API adapters and Integrations
-│   ├── geminiService.ts
-│   ├── storageService.ts
-│   └── ...
-├── App.tsx               # Main Application Logic (Monolith)
-├── server.js             # Express Backend Entry Point
-├── firebaseConfig.ts     # Firebase Initialization
-├── types.ts              # TypeScript Interfaces
-└── package.json          # Dependencies & Scripts
+EventHorizon/
+├── backend/                  # Python FastAPI Backend
+│   ├── config.py             # Environment configuration & fallbacks
+│   ├── database.py           # MongoDB connection pool & automated indexing
+│   ├── encryption.py         # AES-256-GCM data encryption/decryption
+│   ├── main.py               # FastAPI app, Socket.IO, API endpoints & SPA serving
+│   ├── notifications.py      # Web Push (VAPID) notification handlers
+│   ├── requirements.txt      # Python dependencies
+│   └── security.py           # Data sanitization & permission guards
+├── frontend/                 # React 19 + TypeScript + Vite Frontend
+│   ├── components/           # UI components (AdminDashboard, Scanner, Modals, etc.)
+│   ├── services/             # Client services (storageService, geminiService, etc.)
+│   ├── App.tsx               # Primary application routing and views
+│   ├── firebaseConfig.ts     # Firebase client SDK initialization
+│   ├── index.html            # Single Page Application entry HTML
+│   ├── package.json          # Frontend dependencies & build scripts
+│   └── vite.config.ts        # Vite configuration & dev proxy
+├── .node-version             # Node.js 20.10.0 runtime pin for Render
+├── .python-version           # Python 3.11.9 runtime pin for Render
+├── package.json              # Root scripts (concurrent dev runner)
+├── pyrightconfig.json        # Python typing & virtualenv configuration
+├── render.yaml               # Render Infrastructure-as-Code Blueprint
+└── README.md
 ```
 
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+- **Node.js**: `v20.x` or `v18.x`
+- **Python**: `3.11.x`
+- **MongoDB Atlas**: A cloud cluster with a database (e.g. `event_horizon`)
+- **Firebase Project**: For client-side Google & Email authentication
+- **Gemini API Key**: From [Google AI Studio](https://aistudio.google.com/)
 
 ---
 
+### Installation & Setup
 
-## 📜 Scripts
+1. **Clone the Repository**
+   ```bash
+   git clone https://github.com/your-username/EventHorizon.git
+   cd EventHorizon
+   ```
 
-- `npm run dev`: Runs the frontend and backend concurrently.
-- `npm run server`: Runs only the Express backend.
-- `npm run frontend`: Runs only the Vite frontend.
-- `npm run build`: Builds the frontend for production.
-- `npm run preview`: Previews the production build.
+2. **Set up Python Virtual Environment**
+   ```bash
+   # Windows (PowerShell)
+   python -m venv .venv
+   .venv\Scripts\activate
+
+   # Linux / macOS
+   python3.11 -m venv .venv
+   source .venv/bin/activate
+   ```
+
+3. **Install All Dependencies**
+   Install both frontend and backend dependencies using the root helper script:
+   ```bash
+   npm run install:all
+   ```
+   *(Or manually install via `pip install -r backend/requirements.txt` and `npm install --prefix frontend`).*
+
+4. **Configure Environment Variables**
+   Create a `.env` file in the project root directory:
+
+   ```env
+   # --- Server Configuration ---
+   PORT=5005
+   MONGODB_URI=mongodb+srv://<username>:<password>@cluster.mongodb.net/?retryWrites=true&w=majority
+   MONGODB_DB_NAME=event_horizon
+
+   # --- Security / AES-256-GCM Payload Encryption ---
+   ENCRYPTION_KEY=Your32CharacterSecretEncryptionKey!
+   VITE_ENCRYPTION_KEY=Your32CharacterSecretEncryptionKey!
+
+   # --- Google Gemini AI ---
+   GEMINI_API_KEY=your_gemini_api_key
+   VITE_GEMINI_API_KEY=your_gemini_api_key
+
+   # --- Firebase Client Authentication ---
+   FIREBASE_API_KEY=your_firebase_api_key
+   FIREBASE_AUTH_DOMAIN=your-app.firebaseapp.com
+   FIREBASE_PROJECT_ID=your-project-id
+   FIREBASE_STORAGE_BUCKET=your-app.appspot.com
+   FIREBASE_MESSAGING_SENDER_ID=your_sender_id
+   FIREBASE_APP_ID=your_app_id
+
+   # --- Razorpay Payment Gateway ---
+   RAZORPAY_KEY_ID=rzp_test_YourKeyId
+   RAZORPAY_KEY_SECRET=YourKeySecret
+   VITE_RAZORPAY_KEY_ID=rzp_test_YourKeyId
+
+   # --- Twilio SMS & Phone Verification ---
+   TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   TWILIO_AUTH_TOKEN=your_twilio_auth_token
+   TWILIO_VERIFY_SERVICE_SID=VAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   TWILIO_CUSTOM_APP_NAME=Eventron
+   TWILIO_FROM_EMAIL=verified_email@yourdomain.com
+   TWILIO_FROM_NAME=Eventron
+
+   # --- SMTP Email Alerts ---
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USER=your-email@gmail.com
+   SMTP_PASS=your-gmail-app-password
+   SMTP_FROM=your-email@gmail.com
+
+   # --- Web Push (VAPID) Notifications ---
+   VAPID_SUBJECT=mailto:admin@eventron.com
+   VAPID_PRIVATE_KEY=your_vapid_private_key
+   VITE_VAPID_PUBLIC_KEY=your_vapid_public_key
+   ```
+
+5. **Start the Development Servers**
+   Run the backend (port `5005`) and frontend (port `3000`) concurrently:
+   ```bash
+   npm run dev
+   ```
+   - **Frontend App**: [http://localhost:3000](http://localhost:3000)
+   - **Backend API & Swagger Docs**: [http://localhost:5005/docs](http://localhost:5005/docs)
 
 ---
 
-## 🔒 Security
+## 📜 Available Scripts
 
-- **Database Access**: Direct database credentials are **never** exposed to the client. All database operations go through the `server.js` proxy.
-- **Environment Variables**: Sensitive keys (Mongo URI, Server-side API keys) are kept in `.env` and not included in the client bundle.
+| Command | Description |
+| :--- | :--- |
+| `npm run dev` | Runs both the FastAPI backend and Vite frontend concurrently |
+| `npm run server` | Starts only the Python FastAPI backend server |
+| `npm run frontend` | Starts only the Vite frontend development server |
+| `npm run build` | Compiles the React frontend for production into `frontend/dist` |
+| `npm run install:all` | Installs frontend dependencies and Python virtualenv packages |
+| `npm run cache:clear` | Manually clears the backend DiskCache |
+| `npm run cache:stats` | Returns current DiskCache hit/size statistics |
 
 ---
 
-## 🤝 Contribution
+## ☁️ Deployment on Render
 
-Contributions are welcome! Please follow these steps:
-1.  Fork the repository.
-2.  Create a feature branch (`git checkout -b feature/AmazingFeature`).
-3.  Commit your changes (`git commit -m 'Add some AmazingFeature'`).
-4.  Push to the branch (`git push origin feature/AmazingFeature`).
-5.  Open a Pull Request.
+This project is configured as a single unified service on [Render](https://render.com/). FastAPI builds and serves the React single-page app and handles all APIs and WebSockets from a single port.
+
+### Option A: Via Render Blueprint (Recommended)
+1. Push your repository to GitHub.
+2. Go to **Render Dashboard** > **New +** > **Blueprint**.
+3. Select your repository. Render will automatically detect [`render.yaml`](render.yaml) and configure the service.
+4. Fill in the required environment variables from your `.env` and click **Apply**.
+
+### Option B: Manual Web Service Setup
+- **Environment**: `Python`
+- **Build Command**:
+  ```bash
+  npm install --prefix frontend && npm run build --prefix frontend && pip install -r backend/requirements.txt
+  ```
+- **Start Command**:
+  ```bash
+  uvicorn backend.main:combined_app --host 0.0.0.0 --port $PORT
+  ```
+- **Environment Variables**: Add `PYTHON_VERSION=3.11.9`, `NODE_VERSION=20.10.0`, and your `.env` keys.
+
+---
+
+## 👥 Team Members
+
+| Name | Role | LinkedIn | GitHub |
+| :--- | :--- | :--- | :--- |
+| **Prattyan Ghosh** | Team Lead + Backend Developer | [![LinkedIn](https://img.shields.io/badge/LinkedIn-blue?style=flat&logo=linkedin)](https://www.linkedin.com/in/prattyanghosh/) | [![GitHub](https://img.shields.io/badge/GitHub-black?style=flat&logo=github)](https://github.com/prattyan) |
+| **Ashis Mahato** | Frontend Developer | [![LinkedIn](https://img.shields.io/badge/LinkedIn-blue?style=flat&logo=linkedin)](https://www.linkedin.com/in/ashis-mahato-9733332b8/) | [![GitHub](https://img.shields.io/badge/GitHub-black?style=flat&logo=github)](https://github.com/Ashis-404) |
+| **Arnab Ghosh** | Developer | [![LinkedIn](https://img.shields.io/badge/LinkedIn-blue?style=flat&logo=linkedin)](https://www.linkedin.com/in/arnab-ghosh-854854289/) | [![GitHub](https://img.shields.io/badge/GitHub-black?style=flat&logo=github)](https://github.com/arnabg2005) |
+| **Aritra Debnath** | Ideation & Design | [![LinkedIn](https://img.shields.io/badge/LinkedIn-blue?style=flat&logo=linkedin)](https://www.linkedin.com/in/aritradeb07/) | [![GitHub](https://img.shields.io/badge/GitHub-black?style=flat&logo=github)](https://github.com/AritraDeb05) |
+| **Arka Karmakar** | QA & Operations | [![LinkedIn](https://img.shields.io/badge/LinkedIn-blue?style=flat&logo=linkedin)](https://www.linkedin.com/in/arka-karmakar-733b7729a/) | [![GitHub](https://img.shields.io/badge/GitHub-black?style=flat&logo=github)](https://github.com/Arkakarmakar123) |
 
 ---
 
 ## 📄 License
 
-Distributed under the MIT License. See `LICENSE` for more information.
-
-### Team Members
-
-| Name | Role | LinkedIn | GitHub |
-|------|------|----------|--------|
-| Prattyan Ghosh | Team Lead + Backend Developer | [![LinkedIn](https://img.shields.io/badge/LinkedIn-blue?style=flat&logo=linkedin)](https://www.linkedin.com/in/prattyanghosh/) | [![GitHub](https://img.shields.io/badge/GitHub-black?style=flat&logo=github)](https://github.com/prattyan) |
-| Ashis Mahato | Frontend Developer | [![LinkedIn](https://img.shields.io/badge/LinkedIn-blue?style=flat&logo=linkedin)](https://www.linkedin.com/in/ashis-mahato-9733332b8/) | [![GitHub](https://img.shields.io/badge/GitHub-black?style=flat&logo=github)](https://github.com/Ashis-404) |
-| Arnab Ghosh |  Developer | [![LinkedIn](https://img.shields.io/badge/LinkedIn-blue?style=flat&logo=linkedin)](https://www.linkedin.com/in/arnab-ghosh-854854289/) | [![GitHub](https://img.shields.io/badge/GitHub-black?style=flat&logo=github)](https://github.com/arnabg2005) |
-| Aritra Debnath | Ideation person  | [![LinkedIn](https://img.shields.io/badge/LinkedIn-blue?style=flat&logo=linkedin)](https://www.linkedin.com/in/aritradeb07/) | [![GitHub](https://img.shields.io/badge/GitHub-black?style=flat&logo=github)](https://github.com/AritraDeb05) |
-| Arka Karmakar | Liability  | [![LinkedIn](https://img.shields.io/badge/LinkedIn-blue?style=flat&logo=linkedin)](https://www.linkedin.com/in/arka-karmakar-733b7729a/) | [![GitHub](https://img.shields.io/badge/GitHub-black?style=flat&logo=github)](https://github.com/Arkakarmakar123) |
-
-
-
----
+Distributed under the MIT License. See [LICENSE](LICENSE) for more details.
