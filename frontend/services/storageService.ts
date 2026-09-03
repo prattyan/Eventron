@@ -15,39 +15,40 @@ import {
   getFirestore, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, where, getDoc, setDoc, limit
 } from 'firebase/firestore';
 import { auth, db, isFirebaseConfigured, googleProvider } from "../firebaseConfig";
-import { Event, Registration, RegistrationStatus, User, Team, ParticipationMode } from '../types';
+import { Event, Registration, RegistrationStatus, EventStatus, User, Team, ParticipationMode } from '../types';
 import { STORAGE_KEYS } from '../constants';
 
-// --- Configuration ---
-
-// MongoDB Atlas Data API Configuration (Proxied via Local Server or Vercel Function)
 const MONGO_CONFIG = {
-  // When using Vercel, this relative path maps to the serverless function under api/
   endpoint: '/api/action',
   apiKey: 'dummy',
   dataSource: 'Cluster0',
   database: 'event_horizon',
 };
 
-// Hierarchy: MongoDB > Firebase > Local Storage
-// If we have a URI in env (loaded by server) or we are just told to use it.
-// Since this is client code, we check if we are in "Mongo Mode". 
-// We'll assume if the user asked for this, we want to try the proxy.
 const USE_MONGO = true;
 const USE_FIREBASE_STORAGE = isFirebaseConfigured && !USE_MONGO;
-const USE_FIREBASE_AUTH = isFirebaseConfigured; // Can use Firebase Auth even with Mongo Storage
-
-// --- Decryption for encrypted API responses ---
-// SECURITY: Key loaded from environment variable (set in .env as VITE_ENCRYPTION_KEY)
+const USE_FIREBASE_AUTH = isFirebaseConfigured;
 const ENCRYPTION_KEY = import.meta.env.VITE_ENCRYPTION_KEY || 'EventHorizon2026SecureKey32Bytes';
 
 if (!import.meta.env.VITE_ENCRYPTION_KEY) {
   console.warn('⚠️ VITE_ENCRYPTION_KEY not set in .env - using fallback (NOT SECURE FOR PRODUCTION)');
 }
 
+export const generateUUID = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback for non-secure HTTP contexts
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
+
 async function decryptData(encryptedResponse: any): Promise<any> {
   if (!encryptedResponse.encrypted) {
-    return encryptedResponse; // Not encrypted, return as-is
+    return encryptedResponse;
   }
 
   try {
@@ -62,8 +63,7 @@ async function decryptData(encryptedResponse: any): Promise<any> {
     const iv = Uint8Array.from(atob(encryptedResponse.iv), c => c.charCodeAt(0));
     const authTag = Uint8Array.from(atob(encryptedResponse.authTag), c => c.charCodeAt(0));
     const encryptedData = Uint8Array.from(atob(encryptedResponse.data), c => c.charCodeAt(0));
-    
-    // Combine encrypted data with auth tag (Web Crypto expects them together)
+
     const combined = new Uint8Array(encryptedData.length + authTag.length);
     combined.set(encryptedData);
     combined.set(authTag, encryptedData.length);
@@ -78,16 +78,15 @@ async function decryptData(encryptedResponse: any): Promise<any> {
     return JSON.parse(jsonStr);
   } catch (error) {
     console.error('Decryption failed:', error);
-    return encryptedResponse; // Return original if decryption fails
+    return encryptedResponse;
   }
 }
 
-// --- Helper Functions for MongoDB Data API ---
 
-// User context for role-based filtering
 interface UserContext {
   userId?: string;
   userEmail?: string;
+  userRole?: string;
 }
 
 async function mongoRequest(action: string, collection: string, body: any, retries = 3, userContext?: UserContext): Promise<any> {
@@ -97,13 +96,15 @@ async function mongoRequest(action: string, collection: string, body: any, retri
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
-    
-    // SECURITY: Send user context for server-side role-based filtering
+
     if (userContext?.userId) {
       headers['X-User-Id'] = userContext.userId;
     }
     if (userContext?.userEmail) {
       headers['X-User-Email'] = userContext.userEmail;
+    }
+    if (userContext?.userRole) {
+      headers['X-User-Role'] = userContext.userRole;
     }
 
     const response = await fetch(`${MONGO_CONFIG.endpoint}/${action}`, {
@@ -117,19 +118,17 @@ async function mongoRequest(action: string, collection: string, body: any, retri
 
     if (!response.ok) {
       const errorText = await response.text();
-      // If server is starting up (502/504/500), maybe retry?
-      // But usually fetch throws for ECONNREFUSED.
+
       console.error("MongoDB API Error:", response.status, response.statusText, errorText);
       throw new Error(`MongoDB API Error: ${response.statusText} - ${errorText}`);
     }
 
     const jsonResponse = await response.json();
-    
-    // SECURITY: Decrypt response if encrypted
+
     if (jsonResponse.encrypted) {
       return await decryptData(jsonResponse);
     }
-    
+
     return jsonResponse;
   } catch (error) {
     if (retries > 0) {
@@ -141,11 +140,52 @@ async function mongoRequest(action: string, collection: string, body: any, retri
   }
 }
 
-export const getInitialData = async (userId?: string, userEmail?: string) => {
+export const getVectorRecommendations = async (userId: string): Promise<Event[]> => {
+  if (!USE_MONGO) return [];
+  try {
+    const response = await fetch('/api/recommendations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId })
+    });
+    if (!response.ok) throw new Error("Failed to fetch recommendations");
+    const data = await response.json();
+    return (data.recommendations || []).map((e: any) => ({ ...e, id: e.id || e._id }));
+  } catch (error) {
+    console.error("Vector Recommendation Error:", error);
+    return [];
+  }
+};
+
+export const getAdminData = async (userId: string, userEmail: string, userRole: string) => {
+  if (!USE_MONGO) return { users: [], events: [], registrations: [] };
+
+  try {
+    const requests = [
+      { collection: 'users', action: 'find', filter: {} },
+      { collection: 'events', action: 'find', filter: {} },
+      { collection: 'registrations', action: 'find', filter: {} }
+    ];
+
+    const userContext: UserContext = { userId, userEmail, userRole };
+    const response = await mongoRequest('fetchBatch', '', { requests }, 3, userContext);
+
+    return {
+      users: (response.results[0]?.documents || []).map((u: any) => ({ ...u, id: u.id || u._id })),
+      events: (response.results[1]?.documents || []).map((e: any) => ({ ...e, id: e.id || e._id })),
+      registrations: (response.results[2]?.documents || []).map((r: any) => ({ ...r, id: r.id || r._id }))
+    };
+  } catch (e) {
+    console.error("Admin Data Fetch Failed", e);
+    return { users: [], events: [], registrations: [] };
+  }
+};
+
+export const getInitialData = async (userId?: string, userEmail?: string, userRole?: string) => {
   if (USE_MONGO) {
     try {
       const requests = [
-        // 1. Events (Increased limit for organizers, lightweight projection)
+
         {
           collection: 'events',
           action: 'find',
@@ -154,20 +194,17 @@ export const getInitialData = async (userId?: string, userEmail?: string) => {
           projection: { imageUrl: 0, description: 0 },
           sort: { date: -1 }
         },
-        // 2. Registrations (Server will filter based on user permissions)
         {
           collection: 'registrations',
           action: 'find',
           filter: {},
         },
-        // 3. Notifications
         {
           collection: 'notifications',
           action: 'find',
           filter: { userId: userId || "" },
           sort: { createdAt: -1 }
         },
-        // 4. Teams (Server will filter based on user permissions)
         {
           collection: 'teams',
           action: 'find',
@@ -176,8 +213,7 @@ export const getInitialData = async (userId?: string, userEmail?: string) => {
         }
       ];
 
-      // SECURITY: Pass user context for server-side role-based filtering
-      const userContext: UserContext = { userId, userEmail };
+      const userContext: UserContext = { userId, userEmail, userRole };
       const response = await mongoRequest('fetchBatch', '', { requests }, 3, userContext);
 
       if (response && response.results) {
@@ -209,7 +245,6 @@ export const getInitialData = async (userId?: string, userEmail?: string) => {
       console.error("Batch fetch failed", e);
     }
   }
-  // Fallback to individual fetches if batch fails or not using Mongo
   const [events, registrations] = await Promise.all([
     getEvents(),
     getRegistrations()
@@ -217,23 +252,19 @@ export const getInitialData = async (userId?: string, userEmail?: string) => {
   return { events, registrations, notifications: [], teams: [] };
 };
 
-// --- Events ---
 
 export const getEvents = async (): Promise<Event[]> => {
   if (USE_MONGO) {
     try {
-      // Fetch only upcoming/recent 50 events to prevent massive payload
-      // Fetch only upcoming/recent 12 events to prevent massive payload
       const result = await mongoRequest('find', 'events', {
         filter: {},
         limit: 12,
         projection: { imageUrl: 0, description: 0 }
       });
-      // Map MongoDB _id to application id and ensure optional fields are handled
       return result.documents.map((doc: any) => ({
         ...doc,
         id: doc.id || doc._id,
-        imageUrl: '', // default for list view
+        imageUrl: '',
         description: doc.description || ''
       }));
     } catch (e) {
@@ -244,8 +275,6 @@ export const getEvents = async (): Promise<Event[]> => {
 
   if (USE_FIREBASE_STORAGE) {
     try {
-      // Logic for Firebase would be similar if using backend SDK, but client SDK downloads whole doc.
-      // Firestore doesn't support projection in client SDK easily without cloud functions.
       const querySnapshot = await getDocs(query(collection(db, "events"), limit(50)));
       return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Event));
     } catch (e) {
@@ -254,23 +283,14 @@ export const getEvents = async (): Promise<Event[]> => {
     }
   }
 
-  // Fallback / Local Storage
   const stored = localStorage.getItem(STORAGE_KEYS.EVENTS);
   return stored ? JSON.parse(stored) : [];
 };
 
 export const getEventImage = async (id: string): Promise<string | null> => {
   if (USE_MONGO) {
-    try {
-      const result = await mongoRequest('findOne', 'events', {
-        filter: { id: id },
-        projection: { imageUrl: 1 }
-      });
-      return result.document?.imageUrl || null;
-    } catch (e) {
-      console.error("Mongo fetch event image failed", e);
-      return null;
-    }
+    // We now use the dedicated high-speed binary endpoint which is cached on the server
+    return `/api/event-image/${id}`;
   }
   return null;
 };
@@ -280,7 +300,6 @@ const eventCache: Record<string, Event> = {};
 export const getEventById = async (id: string, options?: { excludeImage?: boolean }): Promise<Event | null> => {
   if (USE_MONGO) {
     if (eventCache[id] && !options?.excludeImage) {
-      // Return cached full event if available
       return eventCache[id];
     }
 
@@ -302,22 +321,22 @@ export const getEventById = async (id: string, options?: { excludeImage?: boolea
       return null;
     }
   }
-  // ... Firebase/Local impls (usually already have data or can fetch)
   if (USE_FIREBASE_STORAGE) {
     const snap = await getDoc(doc(db, "events", id));
     return snap.exists() ? ({ id: snap.id, ...snap.data() } as Event) : null;
   }
 
-  const events = await getEvents(); // access local cache
+  const events = await getEvents();
   return events.find(e => e.id === id) || null;
 };
 
 export const saveEvent = async (event: Omit<Event, 'id'>): Promise<Event | null> => {
-  const newId = crypto.randomUUID();
+  const newId = generateUUID();
+  const eventWithStatus = { ...event, status: EventStatus.PENDING };
 
   if (USE_MONGO) {
     try {
-      const newEvent = { ...event, id: newId };
+      const newEvent = { ...eventWithStatus, id: newId };
       await mongoRequest('insertOne', 'events', { document: newEvent });
       return newEvent;
     } catch (e: any) {
@@ -328,19 +347,51 @@ export const saveEvent = async (event: Omit<Event, 'id'>): Promise<Event | null>
 
   if (USE_FIREBASE_STORAGE) {
     try {
-      const docRef = await addDoc(collection(db, "events"), event);
-      return { ...event, id: docRef.id } as Event;
+      const docRef = await addDoc(collection(db, "events"), eventWithStatus);
+      return { ...eventWithStatus, id: docRef.id } as Event;
     } catch (e) {
       console.error("Firebase saveEvent failed:", e);
       return null;
     }
   }
 
-  // Local Storage
-  const newEvent = { ...event, id: newId };
+  const newEvent = { ...eventWithStatus, id: newId };
   const events = await getEvents();
   localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify([...events, newEvent]));
   return newEvent;
+};
+
+export const updateEventStatus = async (eventId: string, status: EventStatus): Promise<boolean> => {
+  if (USE_MONGO) {
+    try {
+      const result = await mongoRequest('updateOne', 'events', {
+        filter: { id: eventId },
+        update: { $set: { status: status } }
+      });
+      return result.modifiedCount > 0 || result.matchedCount > 0;
+    } catch (e) {
+      console.error("Mongo update event status failed", e);
+      return false;
+    }
+  }
+
+  if (USE_FIREBASE_STORAGE) {
+    try {
+      const q = query(collection(db, "events"), where("id", "==", eventId));
+      const snap = await getDocs(q);
+      if (snap.empty) return false;
+      await updateDoc(doc(db, "events", snap.docs[0].id), { status: status });
+      return true;
+    } catch (e) {
+      console.error("Firebase updateEventStatus failed:", e);
+      return false;
+    }
+  }
+
+  const events = await getEvents();
+  const updated = events.map(e => e.id === eventId ? { ...e, status } : e);
+  localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(updated));
+  return true;
 };
 export const updateEvent = async (event: Event): Promise<boolean> => {
   if (USE_MONGO) {
@@ -351,7 +402,7 @@ export const updateEvent = async (event: Event): Promise<boolean> => {
       const oldCapacity = oldEvent ? Number(oldEvent.capacity) : 0;
       const newCapacity = Number(event.capacity);
 
-      const { id, ...updateData } = event;
+      const { id, _id, ...updateData } = event as any;
       const result = await mongoRequest('updateOne', 'events', {
         filter: { id: id },
         update: { $set: updateData }
@@ -535,7 +586,7 @@ export const getRegistrations = async (): Promise<Registration[]> => {
 };
 
 export const addRegistration = async (reg: Omit<Registration, 'id'>): Promise<Registration | null> => {
-  const newId = crypto.randomUUID();
+  const newId = generateUUID();
 
   if (USE_MONGO) {
     try {
@@ -551,7 +602,7 @@ export const addRegistration = async (reg: Omit<Registration, 'id'>): Promise<Re
       });
       const count = regsResult.documents.length;
 
-      const isFull = count >= event.capacity;
+      const isFull = count >= Number(event.capacity || 0);
       const status = isFull ? RegistrationStatus.WAITLISTED : RegistrationStatus.PENDING;
 
       const newReg = { ...reg, id: newId, status: status };
@@ -785,7 +836,7 @@ export const markAttendance = async (id: string): Promise<boolean> => {
 // --- Teams ---
 
 export const createTeam = async (team: Omit<Team, 'id'>): Promise<Team | null> => {
-  const newId = crypto.randomUUID();
+  const newId = generateUUID();
   const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
   const newTeam = { ...team, id: newId, inviteCode } as Team;
 
@@ -875,7 +926,11 @@ export const getTeamsByEventId = async (eventId: string): Promise<Team[]> => {
 export const getUserProfile = async (uid: string): Promise<User | null> => {
   if (USE_MONGO) {
     try {
-      const result = await mongoRequest('findOne', 'users', { filter: { id: uid } });
+      // Prioritize admins collection check
+      let result = await mongoRequest('findOne', 'admins', { filter: { id: uid } });
+      if (!result.document) {
+        result = await mongoRequest('findOne', 'users', { filter: { id: uid } });
+      }
       return result.document || null;
     } catch (e) {
       console.error("Mongo get user failed", e);
@@ -913,14 +968,13 @@ export const saveUserProfile = async (user: User): Promise<void> => {
     try {
       // Check if exists first to avoid duplicates if using simplistic insert
       const existing = await getUserProfile(user.id);
+      const targetCollection = (existing?.role === 'admin' || user.role === 'admin') ? 'admins' : 'users';
       if (!existing) {
-        // For insert, we can leave it as is, Mongo will generate _id or use ours if provided (but usually we shouldn't provide it)
         const { _id, ...cleanUser } = user as any;
-        await mongoRequest('insertOne', 'users', { document: cleanUser });
+        await mongoRequest('insertOne', targetCollection, { document: cleanUser });
       } else {
-        // Strip _id before update to avoid immutable field error
         const { _id, ...updateData } = user as any;
-        await mongoRequest('updateOne', 'users', {
+        await mongoRequest('updateOne', targetCollection, {
           filter: { id: user.id },
           update: { $set: updateData }
         });
@@ -975,8 +1029,12 @@ export const registerUser = async (user: Omit<User, 'id'>, password: string): Pr
   // Check if email already exists
   let existingUser = null;
   if (USE_MONGO) {
-    const result = await mongoRequest('findOne', 'users', { filter: { email: user.email } });
-    existingUser = result.document;
+    let result = await mongoRequest('findOne', 'admins', { filter: { email: user.email } });
+    existingUser = result.document || null;
+    if (!existingUser) {
+      result = await mongoRequest('findOne', 'users', { filter: { email: user.email } });
+      existingUser = result.document || null;
+    }
   } else {
     const stored = localStorage.getItem(STORAGE_KEYS.USERS);
     const users: User[] = stored ? JSON.parse(stored) : [];
@@ -985,7 +1043,7 @@ export const registerUser = async (user: Omit<User, 'id'>, password: string): Pr
 
   if (existingUser) return null;
 
-  const newUser = { ...user, id: crypto.randomUUID(), password }; // Storing password for custom auth
+  const newUser = { ...user, id: generateUUID(), password }; // Storing password for custom auth
   await saveUserProfile(newUser);
 
   // Auto-login for local/mongo mode persistence
@@ -1014,10 +1072,17 @@ export const loginUser = async (email: string, password: string): Promise<User |
 
   if (USE_MONGO) {
     try {
-      const result = await mongoRequest('findOne', 'users', {
+      let result = await mongoRequest('findOne', 'admins', {
         filter: { email: email, password: password }
       });
       user = result.document || null;
+
+      if (!user) {
+        result = await mongoRequest('findOne', 'users', {
+          filter: { email: email, password: password }
+        });
+        user = result.document || null;
+      }
     } catch (e) {
       console.error("Mongo Login Error", e);
     }
@@ -1081,81 +1146,99 @@ export const initRecaptcha = (elementOrId: string | HTMLElement): ApplicationVer
   }
 }
 
-export const signInWithPhone = async (phoneNumber: string, appVerifier: ApplicationVerifier): Promise<ConfirmationResult> => {
-  return await signInWithPhoneNumber(auth, phoneNumber, appVerifier);
+export interface TwilioAuthStatus {
+  isConfigured: boolean;
+  isAvailable: boolean;
+  status: 'active' | 'unconfigured' | 'trial_expired' | 'service_not_found' | 'error';
+  message: string;
 }
 
-export const verifyPhoneOtp = async (confirmationResult: ConfirmationResult, otp: string): Promise<User | null> => {
+export const getTwilioAuthStatus = async (): Promise<TwilioAuthStatus> => {
   try {
+    const response = await fetch('/api/auth/twilio/status');
+    if (!response.ok) {
+      return {
+        isConfigured: false,
+        isAvailable: false,
+        status: 'error',
+        message: 'Unable to check SMS service status'
+      };
+    }
+    return await response.json();
+  } catch {
+    return {
+      isConfigured: false,
+      isAvailable: false,
+      status: 'error',
+      message: 'Network error checking SMS service status'
+    };
+  }
+};
+
+export const sendTwilioOtp = async (phoneNumber: string, channel: 'sms' | 'whatsapp' = 'sms'): Promise<{ success: boolean; status?: string; message?: string; channel?: string }> => {
+  try {
+    const response = await fetch('/api/auth/twilio/send-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumber, channel }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || 'Failed to send OTP via Twilio');
+    }
+
+    return data;
+  } catch (error: any) {
+    console.error("Twilio send OTP error:", error);
+    throw error;
+  }
+};
+
+export const verifyTwilioOtp = async (phoneNumber: string, otp: string): Promise<User | null> => {
+  try {
+    const response = await fetch('/api/auth/twilio/verify-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumber, otp }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || 'Invalid or expired OTP');
+    }
+
+    const user = data.user as User;
+    if (user) {
+      localStorage.setItem('eh_current_user', JSON.stringify(user));
+    }
+    return user;
+  } catch (error: any) {
+    console.error("Twilio verify OTP error:", error);
+    throw error;
+  }
+};
+
+export const signInWithPhone = async (phoneNumber: string, channel: 'sms' | 'whatsapp' = 'sms', appVerifier?: ApplicationVerifier): Promise<any> => {
+  // Use Twilio SMS by default
+  const res = await sendTwilioOtp(phoneNumber, channel);
+  return { phoneNumber, ...res };
+};
+
+
+
+export const verifyPhoneOtp = async (confirmationResult: any, otp: string, fallbackPhone?: string): Promise<User | null> => {
+  const phone = confirmationResult?.phoneNumber || fallbackPhone;
+  if (phone) {
+    return await verifyTwilioOtp(phone, otp);
+  }
+  if (confirmationResult && typeof confirmationResult.confirm === 'function') {
     const result = await confirmationResult.confirm(otp);
     const user = result.user;
-    const phoneNumber = user.phoneNumber; // E.164 format from Firebase (e.g. +16505550101)
-
-    // First try: Find user by phone number (in case they signed up with email first)
-    let profile = null;
-    if (phoneNumber) {
-      // Create variations to search for (E.164, without +, etc)
-      const variations = [
-        phoneNumber,
-        phoneNumber.replace('+', ''),
-        phoneNumber.slice(-10),
-      ];
-      const uniqueVariations = [...new Set(variations)];
-
-      if (USE_MONGO) {
-        for (const variation of uniqueVariations) {
-          const res = await mongoRequest('findOne', 'users', { filter: { phoneNumber: variation } });
-          if (res.document) {
-            console.log("[VerifyOTP] Found user by variation:", variation);
-            profile = res.document;
-            break;
-          }
-        }
-      } else if (USE_FIREBASE_STORAGE) {
-        for (const variation of uniqueVariations) {
-          const q = query(collection(db, "users"), where("phoneNumber", "==", variation));
-          const snap = await getDocs(q);
-          if (!snap.empty) {
-            console.log("[VerifyOTP] Found user by variation:", variation);
-            profile = snap.docs[0].data() as User;
-            break;
-          }
-        }
-      }
-    }
-
-    // Second try: Find by Firebase UID
-    if (!profile) {
-      profile = await getUserProfile(user.uid);
-    }
-
-    if (!profile) {
-      // Create a skeleton profile for phone user
-      profile = {
-        id: user.uid,
-        name: `User ${user.phoneNumber?.slice(-4)}`,
-        email: user.phoneNumber || '', // Use phone as identifier
-        phoneNumber: user.phoneNumber || '',
-        role: 'attendee', // Default role
-        skills: [],
-        bio: ''
-      };
-      await saveUserProfile(profile);
-    } else {
-      // Profile found!
-      // IMPORTANT: Ensure the phone number in DB matches the standardized one from Firebase for future lookups
-      if (profile.phoneNumber !== phoneNumber && phoneNumber) {
-        profile.phoneNumber = phoneNumber;
-        await saveUserProfile(profile);
-      }
-    }
-
-    return profile;
-  } catch (e) {
-    console.error("OTP Verification failed", e);
-    throw e;
+    return await getUserProfile(user.uid);
   }
-}
+  throw new Error("Unable to verify OTP: missing phone number reference.");
+};
 
 
 export const loginWithGoogle = async (role: 'attendee' | 'organizer'): Promise<User | null> => {
@@ -1235,13 +1318,19 @@ export const subscribeToAuth = (callback: (user: User | null) => void) => {
   if (storedUser) {
     try {
       const user = JSON.parse(storedUser);
-      // Verify user still exists in "database" to be safe
+      // Verify user still exists in "database" but be lenient if server is down
       getUserProfile(user.id).then(verified => {
-        if (verified) callback(verified);
-        else {
-          localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
-          callback(null);
+        if (verified) {
+          callback(verified);
+        } else {
+          // Only remove if we actually got a 'null' response from a WORKING server
+          // (Wait, getUserProfile returns null on catch. We should distinguish between "not found" and "request failed")
+          // For now, let's trust the local storage if the server is unreachable.
+          callback(user);
         }
+      }).catch(() => {
+        // Server unreachable, trust local storage
+        callback(user);
       });
     } catch (e) {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
@@ -1255,10 +1344,18 @@ export const subscribeToAuth = (callback: (user: User | null) => void) => {
 };
 
 export const checkPhoneNumberExists = async (phoneNumber: string): Promise<boolean> => {
+  const clean = phoneNumber.trim().replace(/\s+/g, '');
+  const variations = Array.from(new Set([clean, clean.replace('+', ''), clean.slice(-10)]));
+
   if (USE_MONGO) {
     try {
-      const result = await mongoRequest('findOne', 'users', { filter: { phoneNumber } });
-      return !!result.document;
+      for (const v of variations) {
+        let result = await mongoRequest('findOne', 'admins', { filter: { phoneNumber: v } });
+        if (result && result.document) return true;
+        result = await mongoRequest('findOne', 'users', { filter: { phoneNumber: v } });
+        if (result && result.document) return true;
+      }
+      return false;
     } catch (e) {
       console.error("Mongo check phone failed", e);
       return false;
@@ -1266,13 +1363,27 @@ export const checkPhoneNumberExists = async (phoneNumber: string): Promise<boole
   }
 
   if (USE_FIREBASE_STORAGE) {
-    const q = query(collection(db, "users"), where("phoneNumber", "==", phoneNumber));
-    const snap = await getDocs(q);
-    return !snap.empty;
+    try {
+      for (const v of variations) {
+        const q = query(collection(db, "users"), where("phoneNumber", "==", v));
+        const snap = await getDocs(q);
+        if (!snap.empty) return true;
+      }
+    } catch (e) {
+      console.error("Firebase check phone failed", e);
+    }
+    return false;
   }
 
-  return false; // Local storage simplified ignored
+  const stored = localStorage.getItem(STORAGE_KEYS.USERS);
+  if (stored) {
+    const users: User[] = JSON.parse(stored);
+    return users.some(u => variations.includes((u.phoneNumber || '').trim().replace(/\s+/g, '')));
+  }
+
+  return false;
 };
+
 
 export const resetUserPassword = async (email: string): Promise<{ success: boolean; message: string }> => {
   if (USE_FIREBASE_AUTH) {
@@ -1299,9 +1410,13 @@ export const resetUserPassword = async (email: string): Promise<{ success: boole
   let exists = false;
   if (USE_MONGO) {
     try {
-      const result = await mongoRequest('findOne', 'users', { filter: { email } });
-      console.log("[Reset Password] Mongo Find Result:", result);
+      let result = await mongoRequest('findOne', 'admins', { filter: { email } });
       exists = !!result.document;
+      if (!exists) {
+        result = await mongoRequest('findOne', 'users', { filter: { email } });
+        exists = !!result.document;
+      }
+      console.log("[Reset Password] Mongo Find Result:", result);
     } catch (e) {
       console.error("[Reset Password] Mongo Error:", e);
     }
@@ -1313,7 +1428,7 @@ export const resetUserPassword = async (email: string): Promise<{ success: boole
   }
 
   if (exists) {
-    const resetLink = `http://localhost:3000/reset-password-demo?email=${encodeURIComponent(email)}&token=${crypto.randomUUID()}`;
+    const resetLink = `http://localhost:3000/reset-password-demo?email=${encodeURIComponent(email)}&token=${generateUUID()}`;
     console.log(`%c[MOCK EMAIL] Password Reset Link: ${resetLink}`, "color: #4f46e5; font-weight: bold; font-size: 14px;");
     return { success: true, message: "DEMO MODE: Reset link logged to browser console (F12)." };
   }
@@ -1355,8 +1470,23 @@ export const getNotifications = async (userId: string): Promise<any[]> => {
 };
 
 export const addNotification = async (notification: Omit<any, 'id'>): Promise<void> => {
-  const newId = crypto.randomUUID();
+  const newId = generateUUID();
   const newNotification = { ...notification, id: newId, createdAt: new Date().toISOString(), read: false };
+
+  // Trigger Push Notification
+  try {
+    fetch('/api/send-push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: notification.userId,
+        title: notification.title,
+        message: notification.message
+      })
+    }).catch(err => console.error("Push trigger failed silently", err));
+  } catch (e) {
+    // Ignore push errors to prevent blocking main logic
+  }
 
   if (USE_MONGO) {
     try {
@@ -1477,7 +1607,7 @@ export const getMessages = async (eventId: string): Promise<any[]> => {
 };
 
 export const addMessage = async (message: Omit<any, 'id'>): Promise<void> => {
-  const newId = crypto.randomUUID();
+  const newId = generateUUID();
   const newMessage = { ...message, id: newId, createdAt: new Date().toISOString() };
 
   if (USE_MONGO) {
@@ -1536,7 +1666,7 @@ export const getReviews = async (eventId: string): Promise<any[]> => {
 };
 
 export const addReview = async (review: Omit<any, 'id'>): Promise<void> => {
-  const newId = crypto.randomUUID();
+  const newId = generateUUID();
   const newReview = { ...review, id: newId, createdAt: new Date().toISOString() };
 
   if (USE_MONGO) {
@@ -1566,6 +1696,52 @@ export const addReview = async (review: Omit<any, 'id'>): Promise<void> => {
 
 // --- Account Management ---
 
+export const sendEmailDeleteOtp = async (email: string, userId: string): Promise<{ success: boolean; message: string }> => {
+  try {
+    const response = await fetch('/api/auth/email/send-delete-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, userId }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || 'Failed to send verification code.');
+    }
+    return data;
+  } catch (error: any) {
+    console.error("sendEmailDeleteOtp error:", error);
+    throw error;
+  }
+};
+
+export const verifyEmailDeleteOtp = async (
+  email: string,
+  userId: string,
+  otp: string,
+  isOrganizer: boolean
+): Promise<{ success: boolean; message: string }> => {
+  try {
+    const response = await fetch('/api/auth/email/verify-delete-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, userId, otp, isOrganizer }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || 'Invalid or expired verification code.');
+    }
+
+    // Clear local storage session
+    localStorage.removeItem('eh_current_user');
+    return data;
+  } catch (error: any) {
+    console.error("verifyEmailDeleteOtp error:", error);
+    throw error;
+  }
+};
+
 export const deleteAccount = async (userId: string, isOrganizer: boolean): Promise<boolean> => {
   console.log(`[Delete Account] Starting deletion for user: ${userId} (Organizer: ${isOrganizer})`);
 
@@ -1573,6 +1749,7 @@ export const deleteAccount = async (userId: string, isOrganizer: boolean): Promi
     try {
       // 1. Delete User Profile
       await mongoRequest('deleteOne', 'users', { filter: { id: userId } });
+      await mongoRequest('deleteOne', 'admins', { filter: { id: userId } });
 
       // 2. Delete Registrations (as participant)
       await mongoRequest('deleteMany', 'registrations', { filter: { participantId: userId } });

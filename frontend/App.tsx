@@ -1,29 +1,27 @@
 import React, { useState, useEffect, useCallback, Suspense, lazy, useRef } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import QRCode from 'react-qr-code';
-import {
-  Users, Sparkles, MapPin, ExternalLink, QrCode, ChevronRight, Edit, Calendar, Clock, Plus, ScanLine, Filter, Download, Mail, Send, CheckCircle, XCircle,
-  Menu,
-  X,
-  Ticket, Info, Trash2, Camera, RefreshCw, Smartphone, Shield, LogOut, Settings as Setting2, Layout, Bell, UserCircle, Search, MoreHorizontal, Check, AlertCircle, CheckSquare, MessageSquare, KeyRound, Share2, Facebook, Twitter, Linkedin, Copy, Star, CalendarPlus, Loader2, Image as ImageIcon, ChevronLeft, Link, Save, Upload, Tag
-} from 'lucide-react';
+import { Users, Sparkles, MapPin, ExternalLink, QrCode, ChevronRight, ChevronDown, Edit, Calendar, Clock, Plus, ScanLine, Filter, Download, Mail, Send, CheckCircle, XCircle, Menu, X, Ticket, Info, Trash2, Camera, RefreshCw, Smartphone, Shield, LogOut, Settings as Setting2, Layout, Bell, UserCircle, Search, MoreHorizontal, Check, AlertCircle, AlertTriangle, CheckSquare, MessageSquare, KeyRound, Share2, Facebook, Twitter, Linkedin, Copy, Star, CalendarPlus, Loader2, Image as ImageIcon, ChevronLeft, Link, Save, Upload, Tag, Lock } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import Cropper from 'react-easy-crop';
 import { format } from 'date-fns';
 
-import { Event as AppEvent, Registration, RegistrationStatus, Tab, Toast, User, Role, CustomQuestion, Review, ParticipationMode, Team, PromoCode, PaymentDetails, PaymentStatus } from './types';
+import { COUNTRY_CODES, splitPhoneNumber } from './constants';
+import { Event as AppEvent, Registration, RegistrationStatus, EventStatus, Tab, Toast, User, Role, CustomQuestion, Review, ParticipationMode, Team, PromoCode, PaymentDetails, PaymentStatus } from './types';
 import {
   getEvents, saveEvent, updateEvent, getRegistrations, addRegistration,
-  updateRegistrationStatus, markAttendance, deleteRegistration, deleteEvent,
+  updateRegistrationStatus, markAttendance, deleteRegistration, deleteEvent, updateEventStatus,
   loginUser, registerUser, subscribeToAuth, logoutUser,
   loginWithGoogle, saveUserProfile, resetUserPassword,
   createTeam, getTeamByInviteCode, joinTeam, getTeamsByEventId, getTeamById,
   getNotifications, addNotification, markNotificationRead, markAllNotificationsRead,
   getMessages, addMessage, getReviews, addReview, deleteAccount, getEventById, getEventImage, getInitialData,
-  initRecaptcha, signInWithPhone, verifyPhoneOtp, checkPhoneNumberExists, getUserProfile
+  initRecaptcha, signInWithPhone, verifyPhoneOtp, checkPhoneNumberExists, getUserProfile, getVectorRecommendations,
+  generateUUID, getTwilioAuthStatus, sendEmailDeleteOtp, verifyEmailDeleteOtp
 } from './services/storageService';
 import { generateEventDescription, getEventRecommendations } from './services/geminiService';
-import { sendStatusUpdateEmail, sendReminderEmail } from './services/notificationService';
+import { sendStatusUpdateEmail, sendReminderEmail, subscribeToPush } from './services/notificationService';
 import { socketService } from './services/socketService';
 
 // Lazy load heavy components for better initial load time
@@ -32,6 +30,7 @@ const AnalyticsDashboard = lazy(() => import('./components/AnalyticsDashboard'))
 const LiquidChrome = lazy(() => import('./components/LiquidChrome'));
 const ParticleBackground = lazy(() => import('./components/ParticleBackground'));
 const EventChatBot = lazy(() => import('./components/EventChatBot'));
+const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
 
 // --- Sub-Components ---
 
@@ -80,10 +79,12 @@ const Badge = ({ status }: { status: RegistrationStatus }) => {
     [RegistrationStatus.APPROVED]: 'bg-green-900/40 text-green-500 border-green-800',
     [RegistrationStatus.REJECTED]: 'bg-red-900/40 text-red-500 border-red-800',
     [RegistrationStatus.WAITLISTED]: 'bg-orange-900/40 text-orange-400 border-orange-800',
+    [RegistrationStatus.AWAITING_PAYMENT]: 'bg-blue-900/40 text-blue-500 border-blue-800',
+    [RegistrationStatus.TEAM_AWAITING_SUBMISSION]: 'bg-indigo-900/40 text-indigo-400 border-indigo-800',
   };
 
   return (
-    <span className={`px - 2 py - 1 rounded - md text - [11px] font - bold uppercase tracking - wider border ${styles[status]} `}>
+    <span className={`px-2 py-1 rounded-md text-[11px] font-bold uppercase tracking-wider border ${styles[status]}`}>
       {status}
     </span>
   );
@@ -287,6 +288,8 @@ const loadRazorpay = () => {
 
 export default function App() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+  const location = useLocation();
   // Auth State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -297,12 +300,56 @@ export default function App() {
 
   // Phone Auth State
   const [loginMethod, setLoginMethod] = useState<'email' | 'phone'>('email');
+  const [loginDialCode, setLoginDialCode] = useState('+91');
+  const [loginNationalNumber, setLoginNationalNumber] = useState('');
+  const [isSendingLoginOtp, setIsSendingLoginOtp] = useState(false);
+  const [isVerifyingLoginOtp, setIsVerifyingLoginOtp] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [otp, setOtp] = useState('');
   const [showOtpInput, setShowOtpInput] = useState(false);
   const [confirmationResult, setConfirmationResult] = useState<any>(null);
+  const [twilioStatus, setTwilioStatus] = useState<{ isAvailable: boolean; isConfigured: boolean; message: string; checked: boolean }>({
+    isAvailable: true,
+    isConfigured: true,
+    message: '',
+    checked: false
+  });
+
+  useEffect(() => {
+    getTwilioAuthStatus().then((status) => {
+      setTwilioStatus({
+        isAvailable: status.isAvailable,
+        isConfigured: status.isConfigured,
+        message: status.message || '',
+        checked: true
+      });
+      if (!status.isAvailable) {
+        setLoginMethod('email');
+      }
+    });
+  }, []);
 
   const [activeTab, setActiveTab] = useState<Tab>('browse');
+
+  // Sync activeTab with URL path
+  useEffect(() => {
+    const path = location.pathname.substring(1); // remove leading slash
+    if (path === 'explore') {
+      setActiveTab('browse');
+    } else if (path === 'myticket') {
+      setActiveTab('my-tickets');
+    } else if (path === 'organizer') {
+      setActiveTab('organizer');
+    } else if (path === 'admin') {
+      setActiveTab('admin');
+    }
+  }, [location.pathname]);
+
+  const handleTabChange = (tab: string) => {
+    if (tab === 'browse') navigate('/explore');
+    else if (tab === 'my-tickets') navigate('/myticket');
+    else navigate(`/${tab}`);
+  };
   const [events, setEvents] = useState<AppEvent[]>([]);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -313,7 +360,14 @@ export default function App() {
   const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [otpPurpose, setOtpPurpose] = useState<'login' | 'profile' | 'deletion'>('login');
+  const [otpPurpose, setOtpPurpose] = useState<'login' | 'profile'>('login');
+
+  // Account Deletion Email Verification State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteEmailOtp, setDeleteEmailOtp] = useState('');
+  const [isSendingDeleteOtp, setIsSendingDeleteOtp] = useState(false);
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [deleteOtpSent, setDeleteOtpSent] = useState(false);
 
 
 
@@ -357,6 +411,11 @@ export default function App() {
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [scanResult, setScanResult] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [detailsTab, setDetailsTab] = useState<'info' | 'discussion' | 'reviews'>('info');
+  const [showAllAttendees, setShowAllAttendees] = useState(false);
+
+  useEffect(() => {
+    setShowAllAttendees(false);
+  }, [selectedEventForDetails?.id]);
 
   // Organizer View State
   const [organizerSelectedEventId, setOrganizerSelectedEventId] = useState<string | null>(null);
@@ -372,14 +431,16 @@ export default function App() {
   // Form States
   const [newEvent, setNewEvent] = useState<{
     title: string; date: string; endDate: string; location: string; locationType: 'online' | 'offline'; description: string; capacity: string; imageUrl: string; customQuestions: CustomQuestion[]; collaboratorEmails: string[];
-    participationMode: ParticipationMode; maxTeamSize: string;
+    participationMode: ParticipationMode; maxTeamSize: string; minTeamSize: string;
     isPaid: boolean; price: string; promoCodes: PromoCode[];
+    organizerPaymentDetails?: { upiId?: string; bankDetails?: { accountNumber: string; ifsc: string; accountName: string; }; };
   }>({
     title: '', date: '', endDate: '', location: '', locationType: 'offline', description: '', capacity: '', imageUrl: '', customQuestions: [], collaboratorEmails: [],
-    participationMode: 'individual', maxTeamSize: '5',
-    isPaid: false, price: '', promoCodes: []
+    participationMode: 'individual', maxTeamSize: '5', minTeamSize: '2',
+    isPaid: false, price: '', promoCodes: [],
+    organizerPaymentDetails: undefined
   });
-  const [promoCodeInput, setPromoCodeInput] = useState<{ code: string; type: 'percentage' | 'fixed'; value: string }>({ code: '', type: 'percentage', value: '' });
+  const [promoCodeInput, setPromoCodeInput] = useState<{ code: string; type: 'percentage' | 'fixed'; value: string; limit: string }>({ code: '', type: 'percentage', value: '', limit: '' });
   const [appliedPromoCode, setAppliedPromoCode] = useState<PromoCode | null>(null);
   const [userPromoCode, setUserPromoCode] = useState('');
 
@@ -489,6 +550,10 @@ export default function App() {
   // Profile Edit State
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [profileForm, setProfileForm] = useState<{ name: string; email: string; avatarUrl?: string; phoneNumber?: string; isPhoneVerified?: boolean }>({ name: '', email: '' });
+  const [profileDialCode, setProfileDialCode] = useState('+91');
+  const [profileNationalNumber, setProfileNationalNumber] = useState('');
+  const [isSendingProfilePhoneOtp, setIsSendingProfilePhoneOtp] = useState(false);
+  const [isVerifyingProfilePhoneOtp, setIsVerifyingProfilePhoneOtp] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [cropPurpose, setCropPurpose] = useState<'event' | 'profile'>('event'); // Track what we are cropping
 
@@ -556,43 +621,74 @@ export default function App() {
     }
   };
 
-  const handleSendDeleteOtp = async () => {
-    if (!currentUser?.phoneNumber) return;
-    setAuthLoading(true);
+  const handleOpenDeleteModal = async () => {
+    if (!currentUser?.email) {
+      addToast('No email associated with this account.', 'error');
+      return;
+    }
+    setDeleteEmailOtp('');
+    setIsSendingDeleteOtp(true);
     try {
-      const appVerifier = initRecaptcha('persistent-profile-recaptcha');
-      const confirmation = await signInWithPhone(currentUser.phoneNumber, appVerifier);
-      setConfirmationResult(confirmation);
-      setOtpPurpose('deletion');
-      setShowOtpInput(true);
-      addToast('OTP Sent for account deletion', 'info');
+      const res: any = await sendEmailDeleteOtp(currentUser.email, currentUser.id);
+      setDeleteOtpSent(true);
+      if (res?.otp_preview) {
+        addToast(`[DEV MODE] OTP: ${res.otp_preview}`, 'info');
+        setDeleteEmailOtp(res.otp_preview);
+      } else {
+        addToast(`Verification code sent to ${currentUser.email}`, 'success');
+      }
+      setIsDeleteModalOpen(true);
     } catch (e: any) {
       console.error(e);
-      addToast(`Failed to send OTP: ${e.message}`, 'error');
+      addToast(`Failed to send verification code: ${e.message || e}`, 'error');
     } finally {
-      setAuthLoading(false);
+      setIsSendingDeleteOtp(false);
     }
   };
 
-  const handleConfirmDeletion = async () => {
-    if (!currentUser || !otp) return;
-    setAuthLoading(true);
+  const handleSendDeleteEmailOtp = async () => {
+    if (!currentUser?.email) return;
+    setIsSendingDeleteOtp(true);
     try {
-      await confirmationResult.confirm(otp);
-      const success = await deleteAccount(currentUser.id, currentUser.role === 'organizer');
-      if (success) {
-        addToast('Account deleted permanently', 'success');
-        setCurrentUser(null);
-        setIsProfileModalOpen(false);
+      const res: any = await sendEmailDeleteOtp(currentUser.email, currentUser.id);
+      setDeleteOtpSent(true);
+      if (res?.otp_preview) {
+        addToast(`[DEV MODE] OTP: ${res.otp_preview}`, 'info');
+        setDeleteEmailOtp(res.otp_preview);
       } else {
-        addToast('Failed to delete some account data', 'error');
+        addToast(`Verification code sent to ${currentUser.email}`, 'success');
       }
-    } catch (e) {
-      addToast('Invalid OTP', 'error');
+    } catch (e: any) {
+      console.error(e);
+      addToast(`Failed to send verification code: ${e.message || e}`, 'error');
     } finally {
-      setAuthLoading(false);
-      setShowOtpInput(false);
-      setOtp('');
+      setIsSendingDeleteOtp(false);
+    }
+  };
+
+  const handleConfirmEmailDeletion = async () => {
+    if (!currentUser?.email || !deleteEmailOtp.trim()) {
+      addToast('Please enter the 6-digit verification code.', 'error');
+      return;
+    }
+    setIsConfirmingDelete(true);
+    try {
+      await verifyEmailDeleteOtp(
+        currentUser.email,
+        currentUser.id,
+        deleteEmailOtp.trim(),
+        currentUser.role === 'organizer'
+      );
+      addToast('Account deleted permanently', 'success');
+      setCurrentUser(null);
+      setIsDeleteModalOpen(false);
+      setIsProfileModalOpen(false);
+      setDeleteEmailOtp('');
+    } catch (e: any) {
+      console.error(e);
+      addToast(e.message || 'Invalid or expired verification code.', 'error');
+    } finally {
+      setIsConfirmingDelete(false);
     }
   };
 
@@ -603,7 +699,8 @@ export default function App() {
       // SECURITY: Pass both userId and userEmail for server-side role-based filtering
       const initialData = await getInitialData(
         currentUser ? currentUser.id : undefined,
-        currentUser ? currentUser.email : undefined
+        currentUser ? currentUser.email : undefined,
+        currentUser ? currentUser.role : undefined
       );
       const evts = initialData.events || [];
       const regs = initialData.registrations || [];
@@ -635,7 +732,16 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (currentUser?.role === 'admin' && activeTab !== 'admin') {
+      setActiveTab('admin');
+    }
+  }, [currentUser, activeTab]);
+
+  useEffect(() => {
     loadData();
+    if (currentUser) {
+      subscribeToPush(currentUser.id);
+    }
     const interval = setInterval(() => loadData(true), 30000); // Poll every 30 seconds
     return () => clearInterval(interval);
   }, [currentUser]);
@@ -825,31 +931,7 @@ export default function App() {
           return;
         }
 
-        // Prepare Past Events Data
-        const pastEvents = myRegs.map(r => {
-          const e = events.find(ev => ev.id === r.eventId);
-          return e ? { title: e.title, description: e.description, type: e.locationType || 'offline' } : null;
-        }).filter(Boolean) as { title: string; description: string; type: string }[];
-
-        // Prepare Upcoming Events Data
-        const upcoming = events.filter(e =>
-          !myRegs.some(r => r.eventId === e.id) &&
-          new Date(e.date) > new Date()
-        ).map(e => ({
-          id: e.id,
-          title: e.title,
-          description: e.description,
-          date: e.date,
-          type: e.locationType || 'offline'
-        }));
-
-        if (upcoming.length < 1) {
-          setAreRecommendationsLoading(false);
-          return;
-        }
-
-        const recIds = await getEventRecommendations(pastEvents, upcoming);
-        const recs = events.filter(e => recIds.includes(e.id));
+        const recs = await getVectorRecommendations(currentUser.id);
         setRecommendedEvents(recs);
       } catch (e: any) {
         console.error("Gemini Recommendation Error:", e);
@@ -1072,8 +1154,9 @@ export default function App() {
   const resetEventForm = () => {
     setNewEvent({
       title: '', date: '', endDate: '', location: '', locationType: 'offline', description: '', capacity: '', imageUrl: '', customQuestions: [], collaboratorEmails: [],
-      participationMode: 'individual', maxTeamSize: '5',
-      isPaid: false, price: '', promoCodes: []
+      participationMode: 'individual', maxTeamSize: '5', minTeamSize: '2',
+      isPaid: false, price: '', promoCodes: [],
+      organizerPaymentDetails: undefined
     });
     setIsEditMode(false);
     setEditingEventId(null);
@@ -1109,10 +1192,12 @@ export default function App() {
       customQuestions: fullEvent.customQuestions || [],
       collaboratorEmails: fullEvent.collaboratorEmails || [],
       participationMode: fullEvent.participationMode || 'individual',
-      maxTeamSize: fullEvent.maxTeamSize?.toString() || '',
+      maxTeamSize: fullEvent.maxTeamSize?.toString() || '5',
+      minTeamSize: fullEvent.minTeamSize?.toString() || '2',
       isPaid: Boolean(fullEvent.isPaid),
       price: fullEvent.price?.toString() || '',
-      promoCodes: fullEvent.promoCodes || []
+      promoCodes: fullEvent.promoCodes || [],
+      organizerPaymentDetails: fullEvent.organizerPaymentDetails
     });
     setEditingEventId(fullEvent.id);
     setIsEditMode(true);
@@ -1150,9 +1235,11 @@ export default function App() {
         isRegistrationOpen: true,
         participationMode: newEvent.participationMode,
         maxTeamSize: parseInt(newEvent.maxTeamSize) || 0,
+        minTeamSize: parseInt(newEvent.minTeamSize) || 0,
         isPaid: newEvent.isPaid,
         price: newEvent.isPaid ? parseFloat(newEvent.price) : 0,
-        promoCodes: newEvent.promoCodes
+        promoCodes: newEvent.promoCodes,
+        organizerPaymentDetails: newEvent.organizerPaymentDetails
       };
 
       if (new Date(evtDataCommon.endDate) <= new Date(evtDataCommon.date)) {
@@ -1231,8 +1318,8 @@ export default function App() {
 
     try {
       // Re-fetch event to check if status changed (e.g. organizer closed it while modal was open)
-      const allEvents = await getEvents();
-      const latestEvent = allEvents.find(e => e.id === selectedEventForReg.id);
+      // Use getEventById to ensure we get the specific event regardless of pagination limits
+      const latestEvent = await getEventById(selectedEventForReg.id, { excludeImage: true });
 
       if (!latestEvent || latestEvent.isRegistrationOpen === false) {
         addToast('Registration is no longer open for this event', 'error');
@@ -1282,7 +1369,11 @@ export default function App() {
       ).length;
 
       const isCapacityFull = currentRegCount >= (selectedEventForReg.capacity as number);
-      const initialStatus = isCapacityFull ? RegistrationStatus.WAITLISTED : RegistrationStatus.PENDING;
+      let initialStatus = isCapacityFull ? RegistrationStatus.WAITLISTED : RegistrationStatus.PENDING;
+      
+      if (teamRegistrationData.mode === 'team') {
+        initialStatus = RegistrationStatus.TEAM_AWAITING_SUBMISSION;
+      }
 
       let finalRegData: any = {
         eventId: selectedEventForReg.id,
@@ -1351,6 +1442,14 @@ export default function App() {
             setIsRegistering(false);
             return;
           }
+
+          const teamRegs = registrations.filter(r => r.teamId === team.id);
+          if (teamRegs.some(r => r.status !== RegistrationStatus.TEAM_AWAITING_SUBMISSION)) {
+            addToast("This team has already been submitted for approval", "error");
+            setIsRegistering(false);
+            return;
+          }
+
           if (team.members.length >= (selectedEventForReg.maxTeamSize || 99)) {
             addToast("Team is already full", "error");
             setIsRegistering(false);
@@ -1388,6 +1487,35 @@ export default function App() {
     } catch (error: any) {
       console.error("Registration Error:", error);
       addToast(`Error: ${error.message || 'An error occurred during registration'}`, 'error');
+    } finally {
+      setIsRegistering(false);
+    }
+  };
+
+  const handleTeamSubmit = async (teamId: string) => {
+    const teamRegs = registrations.filter(r => r.teamId === teamId);
+    if (teamRegs.length === 0) return;
+    
+    const event = events.find(e => e.id === teamRegs[0].eventId);
+    const minSize = event?.minTeamSize || 1;
+    
+    if (teamRegs.length < minSize) {
+      addToast(`Your team is incomplete. You need at least ${minSize} members to submit (Current: ${teamRegs.length}).`, 'error');
+      return;
+    }
+
+    if (!window.confirm(`Submit team "${teamRegs[0].teamName}" with ${teamRegs.length} members for organizer approval?`)) return;
+    
+    setIsRegistering(true);
+    try {
+      const teamRegs = registrations.filter(r => r.teamId === teamId);
+      await Promise.all(teamRegs.map(r => updateRegistrationStatus(r.id, RegistrationStatus.PENDING)));
+      addToast('Team registration submitted for approval!', 'success');
+      loadData(true);
+      setSelectedRegistrationDetails(null);
+    } catch (error) {
+      console.error(error);
+      addToast('Failed to submit team registration', 'error');
     } finally {
       setIsRegistering(false);
     }
@@ -1523,7 +1651,20 @@ export default function App() {
         image: event.imageUrl,
         order_id: orderData.order.id,
         handler: async function (response: any) {
-          // Success
+          // Verify payment & increment promo usage on backend
+          try {
+            await fetch('/api/verify-payment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                ...response,
+                eventId: reg.eventId,
+                promoCode: paymentAppliedPromo?.code
+              })
+            });
+          } catch (e) { console.error("verify-payment failed", e); }
+
+          // Update local/mongo status
           await updateRegistrationStatus(reg.id, RegistrationStatus.APPROVED, {
             paymentDetails: {
               status: PaymentStatus.COMPLETED,
@@ -1585,7 +1726,10 @@ export default function App() {
         reg.participantName,
         event.title,
         event.date,
-        event.location
+        event.location,
+        reg.participantId,
+        event.id,
+        addNotification
       );
       count++;
     }));
@@ -1837,24 +1981,98 @@ export default function App() {
 
   const handleSendOtp = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!phoneNumber) {
+    const cleanNational = loginNationalNumber.replace(/[^0-9]/g, '');
+    if (!cleanNational || cleanNational.length < 5) {
       addToast('Please enter a valid phone number', 'error');
       return;
     }
 
-    setAuthLoading(true);
+    const fullPhone = `${loginDialCode}${cleanNational}`;
+    setPhoneNumber(fullPhone);
+
+    setIsSendingLoginOtp(true);
     try {
-      const appVerifier = initRecaptcha('persistent-recaptcha-container');
-      const confirmationResult = await signInWithPhone(phoneNumber, appVerifier);
+      // 1. If in Sign-In mode, verify user is already registered with this phone number
+      if (isAuthMode === 'signin') {
+        const userExists = await checkPhoneNumberExists(fullPhone);
+        if (!userExists) {
+          addToast('User not found. No account is registered with this phone number.', 'error');
+          setIsSendingLoginOtp(false);
+          return;
+        }
+      }
+
+      // 2. Dispatch OTP via Twilio SMS
+      const confirmationResult = await signInWithPhone(fullPhone, 'sms');
       setConfirmationResult(confirmationResult);
       setOtpPurpose('login');
       setShowOtpInput(true);
-      addToast('OTP Sent!', 'success');
-    } catch (error) {
+      addToast(`OTP Sent to ${fullPhone} via SMS!`, 'success');
+    } catch (error: any) {
       console.error(error);
-      addToast('Failed to send OTP. Try again.', 'error');
+      const errMsg = error.message || 'Failed to send OTP. Try again.';
+      addToast(errMsg, 'error');
     } finally {
-      setAuthLoading(false);
+      setIsSendingLoginOtp(false);
+    }
+  };
+
+  const handleSendProfilePhoneOtp = async () => {
+    const cleanNational = profileNationalNumber.replace(/[^0-9]/g, '');
+    if (!cleanNational || cleanNational.length < 5) {
+      addToast('Please enter a valid phone number', 'error');
+      return;
+    }
+    const fullPhone = `${profileDialCode}${cleanNational}`;
+
+    if (fullPhone === currentUser?.phoneNumber && profileForm.isPhoneVerified) {
+      addToast('Phone number is already verified', 'info');
+      return;
+    }
+
+    setIsSendingProfilePhoneOtp(true);
+    try {
+      const exists = await checkPhoneNumberExists(fullPhone);
+      if (exists && fullPhone !== currentUser?.phoneNumber) {
+        addToast('This phone number is already linked to another account.', 'error');
+        setIsSendingProfilePhoneOtp(false);
+        return;
+      }
+
+      const confirmation = await signInWithPhone(fullPhone, 'sms');
+      setConfirmationResult(confirmation);
+      setOtpPurpose('profile');
+      setShowOtpInput(true);
+      setProfileForm(prev => ({ ...prev, phoneNumber: fullPhone, isPhoneVerified: false }));
+      addToast(`Verification code sent to ${fullPhone} via SMS!`, 'success');
+    } catch (e: any) {
+      console.error(e);
+      addToast(`Failed to send verification code: ${e.message || e}`, 'error');
+    } finally {
+      setIsSendingProfilePhoneOtp(false);
+    }
+  };
+
+  const handleVerifyProfilePhoneOtp = async () => {
+    if (!otp.trim()) {
+      addToast('Please enter the verification code', 'error');
+      return;
+    }
+    const cleanNational = profileNationalNumber.replace(/[^0-9]/g, '');
+    const fullPhone = `${profileDialCode}${cleanNational}`;
+
+    setIsVerifyingProfilePhoneOtp(true);
+    try {
+      await verifyPhoneOtp(confirmationResult, otp.trim(), fullPhone);
+      setProfileForm(prev => ({ ...prev, phoneNumber: fullPhone, isPhoneVerified: true }));
+      setShowOtpInput(false);
+      setOtp('');
+      addToast('Phone number verified successfully! Click Save Changes to update.', 'success');
+    } catch (e: any) {
+      console.error(e);
+      addToast(e.message || 'Invalid or expired verification code.', 'error');
+    } finally {
+      setIsVerifyingProfilePhoneOtp(false);
     }
   };
 
@@ -1865,39 +2083,37 @@ export default function App() {
       return;
     }
 
-    setAuthLoading(true);
+    const cleanNational = loginNationalNumber.replace(/[^0-9]/g, '');
+    const fullPhone = phoneNumber || `${loginDialCode}${cleanNational}`;
+
+    setIsVerifyingLoginOtp(true);
     try {
-      const user = await verifyPhoneOtp(confirmationResult, otp);
+      const user = await verifyPhoneOtp(confirmationResult, otp, fullPhone);
       if (user) {
         setCurrentUser(user);
         addToast('Logged in successfully!', 'success');
         setAuthForm({ name: '', email: '', password: '', role: 'attendee' });
         setPhoneNumber('');
+        setLoginNationalNumber('');
         setOtp('');
         setShowOtpInput(false);
         setLoginMethod('email');
       } else {
         addToast('Verification failed', 'error');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      addToast('Invalid OTP', 'error');
+      addToast(error.message || 'Invalid OTP', 'error');
     } finally {
-      setAuthLoading(false);
+      setIsVerifyingLoginOtp(false);
     }
   };
 
+
   // --- Views ---
 
-  if (authLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950">
-        <Loader2 className="w-10 h-10 text-orange-500 animate-spin" />
-      </div>
-    );
-  }
-
   const renderAuthModal = () => {
+
     if (!isAuthModalOpen && currentUser) return null;
     return (
       <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 overflow-hidden bg-slate-950">
@@ -1989,7 +2205,7 @@ export default function App() {
                     setAuthLoading(true);
                     try {
                       const role = isAuthMode === 'signup' ? authForm.role : 'attendee';
-                      const user = await loginWithGoogle(role);
+                      const user = await loginWithGoogle(role as 'organizer' | 'attendee');
                       if (user) {
                         setCurrentUser(user);
                         addToast('Welcome back!', 'success');
@@ -2064,10 +2280,29 @@ export default function App() {
                         Email
                       </button>
                       <button
-                        onClick={() => setLoginMethod('phone')}
-                        className={`flex-1 py-1.5 rounded-full text-xs font-bold uppercase transition-all relative z-10 ${loginMethod === 'phone' ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+                        disabled={!twilioStatus.isAvailable}
+                        onClick={() => {
+                          if (twilioStatus.isAvailable) {
+                            setLoginMethod('phone');
+                          } else {
+                            addToast(twilioStatus.message || 'Phone login is currently unavailable (Twilio unconfigured or trial expired)', 'error');
+                          }
+                        }}
+                        title={twilioStatus.isAvailable ? "Login with Phone" : "Phone login unavailable (Twilio offline or trial expired)"}
+                        className={`flex-1 py-1.5 rounded-full text-xs font-bold uppercase transition-all relative z-10 flex items-center justify-center gap-1.5 ${
+                          loginMethod === 'phone'
+                            ? 'text-white'
+                            : twilioStatus.isAvailable
+                            ? 'text-zinc-500 hover:text-zinc-300'
+                            : 'text-zinc-600 opacity-50 cursor-not-allowed'
+                        }`}
                       >
-                        Phone
+                        <span>Phone</span>
+                        {!twilioStatus.isAvailable && twilioStatus.checked && (
+                          <span className="text-[9px] px-1.5 py-0.5 bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-full leading-none">
+                            offline
+                          </span>
+                        )}
                       </button>
                       <div
                         className={`absolute top-1 bottom-1 w-[calc(50%-4px)] bg-zinc-800 rounded-full transition-all duration-300 shadow-md ${loginMethod === 'phone' ? 'left-[50%]' : 'left-1'}`}
@@ -2118,27 +2353,78 @@ export default function App() {
                     <div className="text-left">
                       {!showOtpInput ? (
                         <>
-                          <label className="block text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2 ml-1">Phone Number</label>
-                          <input
-                            type="tel"
-                            required
-                            placeholder="+1 555 000 0000"
-                            className="w-full px-5 py-3.5 rounded-2xl border border-zinc-800 bg-zinc-900/50 text-white focus:ring-2 focus:ring-orange-500/50 outline-none transition-all placeholder:text-zinc-700"
-                            value={phoneNumber}
-                            onChange={e => setPhoneNumber(e.target.value)}
-                          />
+                          <div className="flex items-center justify-between mb-2 ml-1">
+                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
+                              Phone Number
+                            </label>
+                            <span className="text-[10px] text-zinc-500 font-mono">Select country code</span>
+                          </div>
+
+                          <div className="flex gap-2">
+                            {/* Country Code Dropdown */}
+                            <div className="relative w-36 shrink-0">
+                              <select
+                                value={loginDialCode}
+                                onChange={e => setLoginDialCode(e.target.value)}
+                                className="w-full h-full px-3 py-3.5 rounded-2xl border border-zinc-800 bg-zinc-900/90 text-white font-mono text-xs font-bold outline-none focus:ring-2 focus:ring-orange-500/50 appearance-none cursor-pointer pr-7"
+                              >
+                                {COUNTRY_CODES.map(c => (
+                                  <option key={c.code} value={c.dialCode} className="bg-zinc-900 text-white py-1.5">
+                                    {c.name} ({c.dialCode})
+                                  </option>
+                                ))}
+                              </select>
+                              <ChevronDown className="w-4 h-4 text-zinc-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            </div>
+
+
+                            {/* Phone Input */}
+                            <input
+                              type="tel"
+                              inputMode="numeric"
+                              required
+                              placeholder="98765 43210"
+                              className="w-full px-4 py-3.5 rounded-2xl border border-zinc-800 bg-zinc-900/50 text-white focus:ring-2 focus:ring-orange-500/50 outline-none transition-all placeholder:text-zinc-700 font-mono tracking-wide"
+                              value={loginNationalNumber}
+                              onChange={e => setLoginNationalNumber(e.target.value.replace(/[^0-9\s-]/g, ''))}
+                            />
+                          </div>
                         </>
                       ) : (
+
                         <>
-                          <label className="block text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2 ml-1">One-Time Password</label>
+                          <div className="flex items-center justify-between mb-2 ml-1">
+                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
+                              Verification Code
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => { setShowOtpInput(false); setOtp(''); }}
+                              className="text-[11px] text-orange-400 hover:underline"
+                            >
+                              Change Number
+                            </button>
+                          </div>
                           <input
                             type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
                             required
-                            placeholder="******"
-                            className="w-full px-5 py-3.5 rounded-2xl border border-zinc-800 bg-zinc-900/50 text-white focus:ring-2 focus:ring-orange-500/50 outline-none transition-all text-center tracking-[0.5em] font-bold text-lg"
+                            placeholder="••••••"
+                            className="w-full px-5 py-3.5 rounded-2xl border border-zinc-800 bg-zinc-900/50 text-white focus:ring-2 focus:ring-orange-500/50 outline-none transition-all text-center tracking-[0.5em] font-bold text-xl font-mono"
                             value={otp}
-                            onChange={e => setOtp(e.target.value)}
+                            onChange={e => setOtp(e.target.value.replace(/[^0-9]/g, ''))}
                           />
+                          <div className="text-center mt-3">
+                            <button
+                              type="button"
+                              disabled={authLoading}
+                              onClick={(e) => handleSendOtp(e)}
+                              className="text-xs text-zinc-500 hover:text-orange-400 font-medium transition-colors cursor-pointer"
+                            >
+                              Didn't receive code? Resend Code
+                            </button>
+                          </div>
                         </>
                       )}
                     </div>
@@ -2165,7 +2451,7 @@ export default function App() {
 
                   <button
                     type="button"
-                    disabled={authLoading}
+                    disabled={authLoading || isSendingLoginOtp || isVerifyingLoginOtp}
                     onClick={(e) => {
                       if (isAuthMode === 'signup') {
                         handleSignup(e);
@@ -2175,9 +2461,24 @@ export default function App() {
                         handleLogin(e);
                       }
                     }}
-                    className="w-full bg-orange-600 hover:bg-orange-500 text-white font-bold py-3.5 rounded-full transition-all shadow-lg shadow-orange-900/20 mt-4 active:scale-[0.98]"
+                    className="w-full bg-orange-600 hover:bg-orange-500 text-white font-bold py-3.5 rounded-full transition-all shadow-lg shadow-orange-900/20 mt-4 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
                   >
-                    {authLoading ? 'Processing...' : (
+                    {isSendingLoginOtp ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" />
+                        <span>Sending OTP...</span>
+                      </>
+                    ) : isVerifyingLoginOtp ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" />
+                        <span>Verifying...</span>
+                      </>
+                    ) : authLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" />
+                        <span>Processing...</span>
+                      </>
+                    ) : (
                       isAuthMode === 'signup'
                         ? 'Sign Up'
                         : (loginMethod === 'phone'
@@ -2185,6 +2486,9 @@ export default function App() {
                           : 'Sign In')
                     )}
                   </button>
+
+
+
                 </div>
               )}
 
@@ -2216,7 +2520,7 @@ export default function App() {
     <header className="fixed top-6 left-0 right-0 z-50 px-4 sm:px-6 lg:px-8 pointer-events-none">
       <div className="max-w-7xl mx-auto pointer-events-auto">
         <div className={`liquid-glass rounded-full border px-4 sm:px-6 h-16 sm:h-20 flex items-center justify-between shadow-2xl animate-in slide-in-from-top-4 duration-1000 transition-all ${isScrolled ? 'bg-white/[0.02] backdrop-blur-[12px] border-white/20 shadow-sm' : 'border-white/10 backdrop-blur-xl'}`}>
-          <div className="flex items-center group cursor-pointer" onClick={() => setActiveTab('browse')}>
+          <div className="flex items-center group cursor-pointer" onClick={() => handleTabChange('browse')}>
             <div className="flex flex-col">
               <span className="text-xl sm:text-2xl font-black font-outfit tracking-tighter text-refraction drop-shadow-lg">
                 Eventron
@@ -2227,13 +2531,14 @@ export default function App() {
 
           <nav className="hidden lg:flex items-center gap-1 bg-white/5 p-1 rounded-2xl border border-white/5 relative">
             {[
-              { id: 'browse', label: 'Explore' },
+              { id: 'browse', label: 'Explore', show: currentUser?.role !== 'admin' },
               { id: 'organizer', label: 'Dashboard', show: currentUser?.role === 'organizer' },
+              { id: 'admin', label: 'Admin', show: currentUser?.role === 'admin' },
               { id: 'my-tickets', label: 'My Tickets', show: currentUser?.role === 'attendee' }
             ].filter(item => item.show !== false).map((item) => (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id as Tab)}
+                onClick={() => handleTabChange(item.id as Tab)}
                 className={`relative px-6 py-2 rounded-xl text-sm font-black font-outfit transition-all duration-300 whitespace-nowrap z-10 ${activeTab === item.id ? 'text-white' : 'text-slate-400 hover:text-white'}`}
               >
                 <span className="relative z-10">{item.label}</span>
@@ -2265,14 +2570,15 @@ export default function App() {
                   className="absolute top-[88px] left-4 right-4 liquid-glass rounded-3xl border border-white/10 p-4 z-50 lg:hidden flex flex-col gap-2 shadow-2xl"
                 >
                   {[
-                    { id: 'browse', label: 'Explore', icon: Sparkles },
+                    { id: 'browse', label: 'Explore', icon: Sparkles, show: currentUser?.role !== 'admin' },
                     { id: 'organizer', label: 'Dashboard', show: currentUser?.role === 'organizer', icon: Layout },
+                    { id: 'admin', label: 'Admin', show: currentUser?.role === 'admin', icon: Shield },
                     { id: 'my-tickets', label: 'My Tickets', show: currentUser?.role === 'attendee', icon: QrCode }
                   ].filter(item => item.show !== false).map((item) => (
                     <button
                       key={item.id}
                       onClick={() => {
-                        setActiveTab(item.id as Tab);
+                        handleTabChange(item.id as Tab);
                         setIsMobileMenuOpen(false);
                       }}
                       className={`flex items-center gap-4 px-6 py-4 rounded-2xl text-sm font-bold font-outfit transition-all ${activeTab === item.id ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}
@@ -2301,17 +2607,21 @@ export default function App() {
                   <div className="absolute right-0 mt-4 w-80 xs:w-96 liquid-glass rounded-3xl shadow-2xl border border-white/10 py-0 z-20 animate-in fade-in zoom-in-95 origin-top-right overflow-hidden flex flex-col max-h-[500px]">
                     <div className="px-6 py-5 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
                       <h3 className="text-lg font-bold text-white font-outfit">Notifications</h3>
-                      <span className="px-2.5 py-1 rounded-full bg-orange-500/10 text-orange-400 text-[10px] font-black uppercase tracking-wider border border-orange-500/20">{notifications.length} New</span>
+                      <span className="px-2.5 py-1 rounded-full bg-orange-500/10 text-orange-400 text-[10px] font-black uppercase tracking-wider border border-orange-500/20">
+                        {notifications.filter(n => !n.read).length} Unread
+                      </span>
                     </div>
                     <div className="overflow-y-auto custom-scrollbar flex-1">
                       {notifications.length > 0 ? (
-                        notifications.slice(0, 10).map(notif => (
+                        notifications.slice(0, 50).map(notif => (
                           <div
                             key={notif.id}
                             onClick={async () => {
                               if (!notif.read) {
+                                // Optimistic update
+                                setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n));
                                 await markNotificationRead(notif.id);
-                                loadData();
+                                loadData(true);
                               }
                               if (notif.eventId) {
                                 const relatedEvent = events.find(e => e.id === notif.eventId);
@@ -2408,6 +2718,9 @@ export default function App() {
                         <div className="px-3 space-y-1">
                           <button
                             onClick={() => {
+                              const parsed = splitPhoneNumber(currentUser.phoneNumber);
+                              setProfileDialCode(parsed.dialCode);
+                              setProfileNationalNumber(parsed.nationalNumber);
                               setProfileForm({
                                 name: currentUser.name,
                                 email: currentUser.email,
@@ -2422,6 +2735,7 @@ export default function App() {
                               setIsProfileModalOpen(true);
                               setIsProfileMenuOpen(false);
                             }}
+
                             className="w-full text-left px-4 py-3 text-sm font-bold font-outfit text-slate-300 hover:bg-orange-600 hover:text-white rounded-xl transition-all flex items-center gap-3 group"
                           >
                             <UserCircle className="w-5 h-5 text-orange-400 group-hover:text-white" /> Edit Profile
@@ -2456,9 +2770,13 @@ export default function App() {
   );
 
   const renderEvents = () => {
-    const visibleEvents = currentUser?.role === 'organizer'
-      ? events.filter(e => e.organizerId === currentUser.id)
-      : events;
+    const visibleEvents = events.filter(e => {
+      if (currentUser?.role === 'admin') return true;
+      if (e.status === EventStatus.APPROVED) return true;
+      if (currentUser && e.organizerId === currentUser.id) return true;
+      if (!e.status) return true; // Fallback for legacy events
+      return false;
+    });
 
     const now = new Date();
     const upcomingEvents = visibleEvents
@@ -2471,6 +2789,7 @@ export default function App() {
       const isPast = isPastEvent(event);
       const currentRegs = registrations.filter(r => r.eventId === event.id && r.status !== RegistrationStatus.REJECTED).length;
       const remainingSpots = Math.max(0, Number(event.capacity) - currentRegs);
+      const isCardClosed = event.isRegistrationOpen === false || new Date() >= new Date(event.date);
       return (
         <motion.div
           key={event.id}
@@ -2492,9 +2811,16 @@ export default function App() {
             </div>
 
             <div className="absolute bottom-4 left-4 z-10 flex gap-2">
-              <span className={`px-3 py-1 backdrop-blur-md rounded-lg text-[10px] font-bold border transition-colors ${remainingSpots === 0 ? 'bg-red-500/20 text-red-300 border-red-500/30' : remainingSpots <= 5 ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' : 'bg-white/10 text-white border-white/10 group-hover:bg-orange-600/50'}`}>
-                {remainingSpots === 0 ? 'Sold Out' : `${remainingSpots} Spots Left`}
-              </span>
+              {!isCardClosed && (
+                <span className={`px-3 py-1 backdrop-blur-md rounded-lg text-[10px] font-bold border transition-colors ${remainingSpots === 0 ? 'bg-red-500/20 text-red-300 border-red-500/30' : remainingSpots <= 5 ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' : 'bg-white/10 text-white border-white/10 group-hover:bg-orange-600/50'}`}>
+                  {remainingSpots === 0 ? 'Sold Out' : `${remainingSpots} Spots Left`}
+                </span>
+              )}
+              {currentUser && (currentUser.role === 'admin' || currentUser.id === event.organizerId) && event.status && event.status !== EventStatus.APPROVED && (
+                <span className={`px-3 py-1 backdrop-blur-md rounded-lg text-[10px] font-bold border ${event.status === EventStatus.PENDING ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' : 'bg-rose-500/20 text-rose-400 border-rose-500/30'}`}>
+                  {event.status}
+                </span>
+              )}
             </div>
           </div>
 
@@ -2522,7 +2848,7 @@ export default function App() {
               (() => {
                 const isRegistered = currentUser ? registrations.some(r => r.eventId === event.id && r.participantEmail === currentUser.email) : false;
                 const currentRegistrations = registrations.filter(r => r.eventId === event.id && r.status !== RegistrationStatus.REJECTED).length;
-                const isFull = currentRegistrations >= event.capacity;
+                const isFull = currentRegistrations >= Number(event.capacity || 0);
                 const startDate = new Date(event.date);
                 const endDate = event.endDate ? new Date(event.endDate) : new Date(startDate.getTime() + 3600000);
 
@@ -2782,9 +3108,11 @@ export default function App() {
                           </div>
 
                           <div className="absolute bottom-4 left-4 z-10 flex gap-2">
-                            <span className={`px-3 py-1 backdrop-blur-md rounded-lg text-[10px] font-bold border transition-colors ${remainingSpots === 0 ? 'bg-red-500/20 text-red-300 border-red-500/30' : remainingSpots <= 5 ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' : 'bg-white/10 text-white border-white/10 group-hover:bg-orange-600/50'}`}>
-                              {remainingSpots === 0 ? 'Sold Out' : `${remainingSpots} Spots Left`}
-                            </span>
+                            {!isClosed && (
+                              <span className={`px-3 py-1 backdrop-blur-md rounded-lg text-[10px] font-bold border transition-colors ${remainingSpots === 0 ? 'bg-red-500/20 text-red-300 border-red-500/30' : remainingSpots <= 5 ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' : 'bg-white/10 text-white border-white/10 group-hover:bg-orange-600/50'}`}>
+                                {remainingSpots === 0 ? 'Sold Out' : `${remainingSpots} Spots Left`}
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -3108,7 +3436,11 @@ export default function App() {
                         </div>
                         <div className="flex flex-col items-end">
                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest opacity-60">Status</span>
-                          {isPastEvent(event) ? (
+                          {event.status === EventStatus.PENDING ? (
+                            <span className="text-xs font-bold text-amber-500 mt-1">Pending Approval</span>
+                          ) : event.status === EventStatus.REJECTED ? (
+                            <span className="text-xs font-bold text-rose-500 mt-1">Rejected</span>
+                          ) : isPastEvent(event) ? (
                             <span className="text-xs font-bold text-slate-400 mt-1">Inactive</span>
                           ) : (
                             <span className="text-xs font-bold text-emerald-400 mt-1">Active</span>
@@ -3119,6 +3451,15 @@ export default function App() {
                       <h3 className="text-xl font-black font-outfit text-white mb-2 tracking-tight group-hover:text-orange-400 transition-colors line-clamp-1">{event.title}</h3>
                       <div className="flex items-center gap-2 text-slate-400 text-xs font-medium opacity-80 mb-6">
                         <div className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-orange-400" /> {format(new Date(event.date), 'MMM d, h:mm a')}</div>
+                        {(event.isPaid || eventRegs.reduce((acc, r) => acc + (r.paymentDetails?.amount || 0), 0) > 0) && (
+                          <div className="flex items-center gap-1.5 ml-auto bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-emerald-500/20 text-emerald-400">
+                            <span className="font-bold">₹{(() => {
+                              const revenue = eventRegs.reduce((acc, r) => acc + (r.paymentDetails?.amount || 0), 0);
+                              const fee = event.isPaid ? ((event.capacity || 0) < 100 ? 49 : 99) : 0;
+                              return (revenue - fee).toLocaleString();
+                            })()}</span>
+                          </div>
+                        )}
                       </div>
 
                       <div className="mt-auto space-y-4">
@@ -3149,6 +3490,20 @@ export default function App() {
                             <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-white" />
                           </div>
                         </div>
+
+                        {event.isPaid && (
+                          <div className="mt-4 pt-3 border-t border-white/5" onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Settlement</span>
+                              <span className={`text-[10px] font-black uppercase tracking-wider ${event.settlementStatus === 'PROCESSED' ? 'text-emerald-400' :
+                                event.settlementStatus === 'PROCESSING' ? 'text-blue-400' :
+                                  'text-slate-400'
+                                }`}>
+                                {(event.settlementStatus || 'NOT_PROCESSED').replace('_', ' ')}
+                              </span>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -3186,6 +3541,21 @@ export default function App() {
     if (attendanceFilter !== 'ALL') {
       eventRegs = eventRegs.filter(r => attendanceFilter === 'PRESENT' ? r.attended : !r.attended);
     }
+
+    // Grouping Logic for Team Approval
+    const groupedRegs: { teamId: string | null; teamName: string | null; regs: Registration[] }[] = [];
+    eventRegs.forEach(reg => {
+      if (reg.participationType === 'team' && reg.teamId) {
+        let group = groupedRegs.find(g => g.teamId === reg.teamId);
+        if (!group) {
+          group = { teamId: reg.teamId, teamName: reg.teamName || 'Unknown Team', regs: [] };
+          groupedRegs.push(group);
+        }
+        group.regs.push(reg);
+      } else {
+        groupedRegs.push({ teamId: null, teamName: null, regs: [reg] });
+      }
+    });
 
     return (
       <div className="max-w-7xl mx-auto px-4 pt-32 pb-16">
@@ -3357,57 +3727,97 @@ export default function App() {
         ) : (
           <>
             {/* Mobile View: Participant Cards */}
-            <div className="block md:hidden space-y-4">
-              {eventRegs.map(reg => (
-                <div key={reg.id} className="bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-sm flex flex-col gap-3">
-                  <div className="flex justify-between items-start">
-                    <div className="overflow-hidden">
-                      <div className="font-medium text-slate-200 truncate">{reg.participantName}</div>
-                      <div className="text-xs text-slate-400 truncate">{reg.participantEmail}</div>
-                      {event?.isPaid && reg.paymentDetails?.transactionId && (
-                        <div className="text-[10px] text-orange-400/80 mt-1 font-mono truncate">
-                          Txn: {reg.paymentDetails.transactionId} | ₹{reg.paymentDetails.amount}
-                        </div>
+            <div className="block md:hidden space-y-6">
+              {groupedRegs.map((group, gIdx) => (
+                <div key={group.teamId || `indiv-${gIdx}`} className={group.teamId ? "space-y-4 p-4 bg-orange-500/5 rounded-2xl border border-orange-500/20" : "space-y-4"}>
+                  {group.teamId && (
+                    <div className="flex justify-between items-center pb-2 border-b border-orange-500/10">
+                      <div className="flex items-center gap-2">
+                        <Users className="w-4 h-4 text-orange-400" />
+                        <span className="text-xs font-black uppercase tracking-widest text-orange-400">{group.teamName}</span>
+                      </div>
+                      {group.regs.every(r => r.status === RegistrationStatus.PENDING) && (
+                        (() => {
+                          const minSize = event?.minTeamSize || 1;
+                          const isUnderSize = group.regs.length < minSize;
+                          return (
+                            <button
+                              disabled={isUnderSize}
+                              onClick={async () => {
+                                if (confirm(`Approve entire team "${group.teamName}"?`)) {
+                                  await Promise.all(group.regs.map(r => updateRegistrationStatus(r.id, RegistrationStatus.APPROVED)));
+                                  addToast(`Team "${group.teamName}" approved!`, 'success');
+                                  loadData();
+                                }
+                              }}
+                              className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-lg transition-all ${isUnderSize ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed' : 'bg-green-600 text-white shadow-lg'}`}
+                            >
+                              {isUnderSize ? `Under-sized (${group.regs.length}/${minSize})` : 'Approve Team'}
+                            </button>
+                          );
+                        })()
                       )}
                     </div>
-                    <Badge status={reg.status} />
-                  </div>
-
-                  <div className="flex justify-between items-center border-t border-slate-800 pt-3">
-                    <div className="text-sm">
-                      {reg.attended ? (
-                        <div className="flex flex-col gap-1">
-                          <span className="flex items-center gap-1 text-green-600 font-medium"><CheckCircle className="w-4 h-4" /> Present</span>
-                          {reg.attendanceTime && (
-                            <span className="text-xs text-slate-400">
-                              {format(new Date(reg.attendanceTime), 'h:mm a')}
-                            </span>
+                  )}
+                  
+                  {group.regs.map(reg => (
+                    <div key={reg.id} className="bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-sm flex flex-col gap-3">
+                      <div className="flex justify-between items-start">
+                        <div className="overflow-hidden">
+                          <div className="font-medium text-slate-200 truncate">{reg.participantName}</div>
+                          <div className="text-xs text-slate-400 truncate">{reg.participantEmail}</div>
+                          {reg.participationType === 'team' && reg.isTeamLeader && (
+                            <div className="text-[8px] font-black uppercase tracking-widest text-orange-500 mt-1">Team Leader</div>
+                          )}
+                          {event?.isPaid && reg.paymentDetails?.transactionId && (
+                            <div className="text-[10px] text-orange-400/80 mt-1 font-mono truncate">
+                              Txn: {reg.paymentDetails.transactionId} | ₹{reg.paymentDetails.amount}
+                            </div>
                           )}
                         </div>
-                      ) : (
-                        <span className="text-slate-400 text-xs">Not Scanned</span>
-                      )}
-                    </div>
-
-                    {reg.status === RegistrationStatus.PENDING && (
-                      <div className="flex gap-2">
-                        <button onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.APPROVED)} className="p-1.5 bg-green-900/30 text-green-400 rounded-lg border border-green-800" title="Approve"><CheckCircle className="w-5 h-5" /></button>
-                        <button onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.REJECTED)} className="p-1.5 bg-red-900/30 text-red-400 rounded-lg border border-red-800" title="Reject"><XCircle className="w-5 h-5" /></button>
+                        <Badge status={reg.status} />
                       </div>
-                    )}
 
-                    {reg.status === RegistrationStatus.APPROVED && !reg.attended && (
-                      <button
-                        onClick={() => handleManualAttendance(reg.id)}
-                        className="px-3 py-1.5 bg-orange-900/40 text-orange-400 text-xs font-medium rounded-lg border border-orange-800 hover:bg-orange-900/60 transition-colors"
-                      >
-                        Mark Present
-                      </button>
-                    )}
-                  </div>
+                      <div className="flex justify-between items-center border-t border-slate-800 pt-3">
+                        <div className="text-sm">
+                          {reg.attended ? (
+                            <div className="flex flex-col gap-1">
+                              <span className="flex items-center gap-1 text-green-600 font-medium"><CheckCircle className="w-4 h-4" /> Present</span>
+                              {reg.attendanceTime && (
+                                <span className="text-xs text-slate-400">
+                                  {format(new Date(reg.attendanceTime), 'h:mm a')}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 text-xs">Not Scanned</span>
+                          )}
+                        </div>
+
+                        <div className="flex gap-2">
+                          {reg.status === RegistrationStatus.PENDING && (
+                            <>
+                              <button onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.APPROVED)} className="p-1.5 bg-green-900/30 text-green-400 rounded-lg border border-green-800" title="Approve"><CheckCircle className="w-5 h-5" /></button>
+                              <button onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.REJECTED)} className="p-1.5 bg-red-900/30 text-red-400 rounded-lg border border-red-800" title="Reject"><XCircle className="w-5 h-5" /></button>
+                            </>
+                          )}
+                          <button onClick={() => setSelectedRegistrationDetails(reg)} className="p-1.5 bg-slate-800 text-slate-300 rounded-lg border border-slate-700" title="View"><ExternalLink className="w-5 h-5" /></button>
+                        </div>
+
+                        {reg.status === RegistrationStatus.APPROVED && !reg.attended && (
+                          <button
+                            onClick={() => handleManualAttendance(reg.id)}
+                            className="px-3 py-1.5 bg-orange-900/40 text-orange-400 text-xs font-medium rounded-lg border border-orange-800 hover:bg-orange-900/60 transition-colors"
+                          >
+                            Mark Present
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ))}
-              {eventRegs.length === 0 && (
+              {groupedRegs.length === 0 && (
                 <div className="text-center text-slate-400 py-8 bg-slate-900 rounded-xl border border-dashed border-slate-700">
                   No registrations found matching criteria.
                 </div>
@@ -3448,98 +3858,136 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
-                  {eventRegs.map(reg => (
-                    <tr key={reg.id} className={`hover:bg-slate-800/50 transition-colors ${selectedRegistrationIds.includes(reg.id) ? 'bg-orange-900/10' : ''}`}>
-                      <td className="px-6 py-4">
-                        <input
-                          type="checkbox"
-                          checked={selectedRegistrationIds.includes(reg.id)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedRegistrationIds(prev => [...prev, reg.id]);
-                            } else {
-                              setSelectedRegistrationIds(prev => prev.filter(id => id !== reg.id));
-                            }
-                          }}
-                          className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-orange-600 focus:ring-orange-500 focus:ring-offset-slate-900"
-                        />
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-slate-200">{reg.participantName}</div>
-                        {reg.participationType === 'team' && (
-                          <div className="text-[10px] text-orange-400 mt-0.5 flex items-center gap-1.5 font-semibold">
-                            <span>{reg.teamName}</span>
-                            <span className="text-slate-600 font-normal">|</span>
-                            <span className="font-mono bg-orange-500/10 px-1 rounded border border-orange-500/20">
-                              {teams.find(t => t.id === reg.teamId)?.inviteCode || 'N/A'}
-                            </span>
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 text-slate-400">{reg.participantEmail}</td>
-                      <td className="px-6 py-4"><Badge status={reg.status} /></td>
-                      {event?.isPaid && (
-                        <>
-                          <td className="px-6 py-4 text-slate-300 font-medium">
-                            {reg.paymentDetails?.amount ? `₹${reg.paymentDetails.amount}` : '-'}
+                  {groupedRegs.map((group, gIdx) => (
+                    <React.Fragment key={group.teamId || `indiv-${gIdx}`}>
+                      {group.teamId && (
+                        <tr className="bg-orange-500/5 border-l-4 border-orange-500">
+                          <td className="px-6 py-2" colSpan={2}>
+                            <div className="flex items-center gap-3">
+                              <Users className="w-4 h-4 text-orange-400" />
+                              <span className="text-xs font-black uppercase tracking-widest text-orange-400">Team: {group.teamName}</span>
+                              <span className="text-[10px] font-mono bg-orange-500/10 px-1.5 py-0.5 rounded text-orange-300/70 border border-orange-500/20">
+                                {teams.find(t => t.id === group.teamId)?.inviteCode || 'N/A'}
+                              </span>
+                            </div>
                           </td>
-                          <td className="px-6 py-4 text-slate-500 font-mono text-[10px] max-w-[120px] truncate" title={reg.paymentDetails?.transactionId}>
-                            {reg.paymentDetails?.transactionId || '-'}
+                          <td className="px-6 py-2 text-slate-500 text-[10px] uppercase font-bold tracking-tighter">
+                            {group.regs.length} Members
                           </td>
-                        </>
+                          <td className="px-6 py-2" colSpan={4}></td>
+                          <td className="px-6 py-2 text-right">
+                            {group.regs.every(r => r.status === RegistrationStatus.PENDING) && (
+                              (() => {
+                                const minSize = event?.minTeamSize || 1;
+                                const isUnderSize = group.regs.length < minSize;
+                                return (
+                                  <button
+                                    disabled={isUnderSize}
+                                    onClick={async () => {
+                                      if (confirm(`Approve entire team "${group.teamName}" (${group.regs.length} members)?`)) {
+                                        await Promise.all(group.regs.map(r => updateRegistrationStatus(r.id, RegistrationStatus.APPROVED)));
+                                        addToast(`Team "${group.teamName}" approved!`, 'success');
+                                        loadData();
+                                      }
+                                    }}
+                                    className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-lg border transition-all ${isUnderSize ? 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed' : 'bg-green-600/20 text-green-400 border-green-500/30 hover:bg-green-600 hover:text-white'}`}
+                                  >
+                                    {isUnderSize ? `Under-sized (${group.regs.length}/${minSize})` : 'Approve Team'}
+                                  </button>
+                                );
+                              })()
+                            )}
+                          </td>
+                        </tr>
                       )}
-                      <td className="px-6 py-4">
-                        {reg.attended ? (
-                          <span className="flex items-center gap-1 text-green-600 font-medium">
-                            <CheckCircle className="w-4 h-4" /> Present
-                          </span>
-                        ) : (
-                          <span className="text-slate-400">Not yet</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 text-slate-400 text-sm">
-                        {reg.attendanceTime ? format(new Date(reg.attendanceTime), 'h:mm a') : '-'}
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        {reg.status === RegistrationStatus.PENDING && (
-                          <div className="flex justify-end gap-2">
-                            <button
-                              onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.APPROVED)}
-                              className="p-1.5 text-green-400 hover:bg-green-900/30 rounded-md"
-                              title="Approve"
-                            >
-                              <CheckCircle className="w-5 h-5" />
-                            </button>
-                            <button
-                              onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.REJECTED)}
-                              className="p-1.5 text-red-400 hover:bg-red-900/30 rounded-md"
-                              title="Reject"
-                            >
-                              <XCircle className="w-5 h-5" />
-                            </button>
-                          </div>
-                        )}
-                        {reg.status === RegistrationStatus.APPROVED && !reg.attended && (
-                          <button
-                            onClick={() => handleManualAttendance(reg.id)}
-                            className="text-orange-400 hover:text-orange-300 text-sm font-medium hover:underline mr-2"
-                          >
-                            Mark Present
-                          </button>
-                        )}
+                      {group.regs.map(reg => (
+                        <tr key={reg.id} className={`hover:bg-slate-800/50 transition-colors ${selectedRegistrationIds.includes(reg.id) ? 'bg-orange-900/10' : ''}`}>
+                          <td className="px-6 py-4">
+                            <input
+                              type="checkbox"
+                              checked={selectedRegistrationIds.includes(reg.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedRegistrationIds(prev => [...prev, reg.id]);
+                                } else {
+                                  setSelectedRegistrationIds(prev => prev.filter(id => id !== reg.id));
+                                }
+                              }}
+                              className="w-4 h-4 rounded border-slate-700 bg-slate-950 text-orange-600 focus:ring-orange-500 focus:ring-offset-slate-900"
+                            />
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="font-medium text-slate-200">{reg.participantName}</div>
+                            {reg.participationType === 'team' && reg.isTeamLeader && (
+                              <div className="text-[8px] font-black uppercase tracking-widest text-orange-500 mt-0.5">Team Leader</div>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-slate-400">{reg.participantEmail}</td>
+                          <td className="px-6 py-4"><Badge status={reg.status} /></td>
+                          {event?.isPaid && (
+                            <>
+                              <td className="px-6 py-4 text-slate-300 font-medium">
+                                {reg.paymentDetails?.amount ? `₹${reg.paymentDetails.amount}` : '-'}
+                              </td>
+                              <td className="px-6 py-4 text-slate-500 font-mono text-[10px] max-w-[120px] truncate" title={reg.paymentDetails?.transactionId}>
+                                {reg.paymentDetails?.transactionId || '-'}
+                              </td>
+                            </>
+                          )}
+                          <td className="px-6 py-4">
+                            {reg.attended ? (
+                              <span className="flex items-center gap-1 text-green-600 font-medium">
+                                <CheckCircle className="w-4 h-4" /> Present
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">Not yet</span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-slate-400 text-sm">
+                            {reg.attendanceTime ? format(new Date(reg.attendanceTime), 'h:mm a') : '-'}
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            {reg.status === RegistrationStatus.PENDING && (
+                              <div className="flex justify-end gap-2">
+                                <button
+                                  onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.APPROVED)}
+                                  className="p-1.5 text-green-400 hover:bg-green-900/30 rounded-md"
+                                  title="Approve"
+                                >
+                                  <CheckCircle className="w-5 h-5" />
+                                </button>
+                                <button
+                                  onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.REJECTED)}
+                                  className="p-1.5 text-red-400 hover:bg-red-900/30 rounded-md"
+                                  title="Reject"
+                                >
+                                  <XCircle className="w-5 h-5" />
+                                </button>
+                              </div>
+                            )}
+                            {reg.status === RegistrationStatus.APPROVED && !reg.attended && (
+                              <button
+                                onClick={() => handleManualAttendance(reg.id)}
+                                className="text-orange-400 hover:text-orange-300 text-sm font-medium hover:underline mr-2"
+                              >
+                                Mark Present
+                              </button>
+                            )}
 
-                        <button
-                          onClick={() => setSelectedRegistrationDetails(reg)}
-                          className="text-slate-400 hover:text-slate-200 text-sm font-medium hover:underline ml-2"
-                        >
-                          View
-                        </button>
-                      </td>
-                    </tr>
+                            <button
+                              onClick={() => setSelectedRegistrationDetails(reg)}
+                              className="text-slate-400 hover:text-slate-200 text-sm font-medium hover:underline ml-2"
+                            >
+                              View
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
                   ))}
-                  {eventRegs.length === 0 && (
+                  {groupedRegs.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-6 py-8 text-center text-slate-400">No registrations found matching criteria.</td>
+                      <td colSpan={8} className="px-6 py-8 text-center text-slate-400">No registrations found matching criteria.</td>
                     </tr>
                   )}
                 </tbody>
@@ -3553,24 +4001,22 @@ export default function App() {
 
   return (
     <div className="min-h-screen pb-20">
-      {renderHeader()}
+      {activeTab !== 'admin' && renderHeader()}
       <ToastContainer toasts={toasts} />
 
       <main className="pt-6 px-4 sm:px-0 max-w-7xl mx-auto">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={activeTab}
-            initial={{ opacity: 0, y: 20, filter: 'blur(5px)' }}
-            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-            exit={{ opacity: 0, y: -20, filter: 'blur(5px)' }}
-            transition={{ duration: 0.3, ease: 'easeOut' }}
-            className="w-full"
-          >
-            {activeTab === 'browse' && renderEvents()}
-            {activeTab === 'my-tickets' && (currentUser ? renderMyTickets() : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Please sign in to view your tickets.</div>)}
-            {activeTab === 'organizer' && (currentUser?.role === 'organizer' ? renderOrganizer() : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Organizer dashboard requires organizer privileges.</div>)}
-          </motion.div>
-        </AnimatePresence>
+        <Routes>
+          <Route path="/" element={<Navigate to="/explore" replace />} />
+          <Route path="/explore" element={renderEvents()} />
+          <Route path="/myticket" element={currentUser ? renderMyTickets() : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Please sign in to view your tickets.</div>} />
+          <Route path="/organizer" element={currentUser?.role === 'organizer' ? renderOrganizer() : <Navigate to="/explore" replace />} />
+          <Route path="/admin" element={
+            <Suspense fallback={<div className="flex justify-center p-20"><Loader2 className="animate-spin text-orange-500" /></div>}>
+              {currentUser?.role === 'admin' ? <AdminDashboard currentUser={currentUser} onLogout={handleLogout} /> : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Access Restricted</div>}
+            </Suspense>
+          } />
+          <Route path="*" element={<Navigate to="/explore" replace />} />
+        </Routes>
       </main>
 
       {renderAuthModal()}
@@ -3739,17 +4185,31 @@ export default function App() {
                 </div>
 
                 {(newEvent.participationMode === 'team' || newEvent.participationMode === 'both') && (
-                  <div className="animate-in slide-in-from-top-2 duration-300">
-                    <label className="block text-sm font-medium text-slate-300 mb-1">Max Team Size</label>
-                    <input
-                      required
-                      type="number"
-                      min="2"
-                      className="w-full px-4 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 focus:ring-2 focus:ring-orange-500 outline-none transition-all"
-                      value={newEvent.maxTeamSize}
-                      onChange={e => setNewEvent({ ...newEvent, maxTeamSize: e.target.value })}
-                      placeholder="e.g. 5"
-                    />
+                  <div className="grid grid-cols-2 gap-4 animate-in slide-in-from-top-2 duration-300">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-300 mb-1">Min Team Size</label>
+                      <input
+                        required
+                        type="number"
+                        min="1"
+                        className="w-full px-4 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 focus:ring-2 focus:ring-orange-500 outline-none transition-all"
+                        value={newEvent.minTeamSize}
+                        onChange={e => setNewEvent({ ...newEvent, minTeamSize: e.target.value })}
+                        placeholder="e.g. 2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-300 mb-1">Max Team Size</label>
+                      <input
+                        required
+                        type="number"
+                        min="1"
+                        className="w-full px-4 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 focus:ring-2 focus:ring-orange-500 outline-none transition-all"
+                        value={newEvent.maxTeamSize}
+                        onChange={e => setNewEvent({ ...newEvent, maxTeamSize: e.target.value })}
+                        placeholder="e.g. 5"
+                      />
+                    </div>
                   </div>
                 )}
 
@@ -3789,30 +4249,116 @@ export default function App() {
                         />
                       </div>
 
-                      <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-2">Promo Codes</label>
-                        <div className="flex gap-2 mb-2">
+                      <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700 space-y-4">
+                        <label className="block text-sm font-bold text-orange-400 mb-2">Revenue Settlement Details</label>
+                        <p className="text-xs text-slate-500 mb-3">Please provide at least one method for receiving payouts.</p>
+
+                        <div>
+                          <label className="block text-xs font-medium text-slate-400 mb-1">UPI ID</label>
                           <input
                             type="text"
-                            placeholder="Code (e.g. EARLYBIRD)"
-                            className="flex-1 px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-sm focus:ring-2 focus:ring-orange-500 outline-none uppercase"
+                            className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                            placeholder="e.g. username@upi"
+                            value={newEvent.organizerPaymentDetails?.upiId || ''}
+                            onChange={e => setNewEvent({
+                              ...newEvent,
+                              organizerPaymentDetails: {
+                                ...newEvent.organizerPaymentDetails,
+                                upiId: e.target.value
+                              }
+                            })}
+                          />
+                        </div>
+
+                        <div className="border-t border-slate-800 pt-3">
+                          <label className="block text-xs font-medium text-slate-400 mb-2">Bank Account Details (Optional)</label>
+                          <div className="space-y-2">
+                            <input
+                              type="text"
+                              className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                              placeholder="Account Holder Name"
+                              value={newEvent.organizerPaymentDetails?.bankDetails?.accountName || ''}
+                              onChange={e => setNewEvent({
+                                ...newEvent,
+                                organizerPaymentDetails: {
+                                  ...newEvent.organizerPaymentDetails,
+                                  bankDetails: {
+                                    ...(newEvent.organizerPaymentDetails?.bankDetails || { accountNumber: '', ifsc: '', accountName: '' }),
+                                    accountName: e.target.value
+                                  }
+                                }
+                              })}
+                            />
+                            <div className="grid grid-cols-2 gap-2">
+                              <input
+                                type="text"
+                                className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                                placeholder="Account Number"
+                                value={newEvent.organizerPaymentDetails?.bankDetails?.accountNumber || ''}
+                                onChange={e => setNewEvent({
+                                  ...newEvent,
+                                  organizerPaymentDetails: {
+                                    ...newEvent.organizerPaymentDetails,
+                                    bankDetails: {
+                                      ...(newEvent.organizerPaymentDetails?.bankDetails || { accountNumber: '', ifsc: '', accountName: '' }),
+                                      accountNumber: e.target.value
+                                    }
+                                  }
+                                })}
+                              />
+                              <input
+                                type="text"
+                                className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-sm focus:ring-2 focus:ring-orange-500 outline-none uppercase"
+                                placeholder="IFSC Code"
+                                value={newEvent.organizerPaymentDetails?.bankDetails?.ifsc || ''}
+                                onChange={e => setNewEvent({
+                                  ...newEvent,
+                                  organizerPaymentDetails: {
+                                    ...newEvent.organizerPaymentDetails,
+                                    bankDetails: {
+                                      ...(newEvent.organizerPaymentDetails?.bankDetails || { accountNumber: '', ifsc: '', accountName: '' }),
+                                      ifsc: e.target.value.toUpperCase()
+                                    }
+                                  }
+                                })}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-slate-300 mb-2">Promo Codes</label>
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          <input
+                            type="text"
+                            placeholder="CODE"
+                            className="flex-[2] min-w-[100px] px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-sm focus:ring-2 focus:ring-orange-500 outline-none uppercase"
                             value={promoCodeInput.code}
                             onChange={e => setPromoCodeInput({ ...promoCodeInput, code: e.target.value.toUpperCase() })}
                           />
                           <select
-                            className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                            className="w-[70px] px-2 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-sm focus:ring-2 focus:ring-orange-500 outline-none"
                             value={promoCodeInput.type}
                             onChange={e => setPromoCodeInput({ ...promoCodeInput, type: e.target.value as 'percentage' | 'fixed' })}
                           >
-                            <option value="percentage">% Off</option>
-                            <option value="fixed">₹ Off</option>
+                            <option value="percentage">%</option>
+                            <option value="fixed">₹</option>
                           </select>
                           <input
                             type="number"
-                            placeholder="Value"
-                            className="w-20 px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                            placeholder="Val"
+                            className="w-[60px] px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-sm focus:ring-2 focus:ring-orange-500 outline-none"
                             value={promoCodeInput.value}
                             onChange={e => setPromoCodeInput({ ...promoCodeInput, value: e.target.value })}
+                          />
+                          <input
+                            type="number"
+                            placeholder="Max"
+                            title="Usage Limit"
+                            className="w-[60px] px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                            value={promoCodeInput.limit}
+                            onChange={e => setPromoCodeInput({ ...promoCodeInput, limit: e.target.value })}
                           />
                           <button
                             type="button"
@@ -3820,18 +4366,24 @@ export default function App() {
                               if (promoCodeInput.code && promoCodeInput.value) {
                                 setNewEvent(prev => ({
                                   ...prev,
-                                  promoCodes: [...prev.promoCodes, {
-                                    code: promoCodeInput.code,
-                                    type: promoCodeInput.type,
-                                    value: parseFloat(promoCodeInput.value)
-                                  }]
+                                  promoCodes: [
+                                    ...(prev.promoCodes || []),
+                                    {
+                                      code: promoCodeInput.code,
+                                      type: promoCodeInput.type,
+                                      value: Number(promoCodeInput.value),
+                                      usageLimit: promoCodeInput.limit ? Number(promoCodeInput.limit) : undefined,
+                                      usedCount: 0
+                                    }
+                                  ]
                                 }));
-                                setPromoCodeInput({ code: '', type: 'percentage', value: '' });
+                                setPromoCodeInput({ code: '', type: 'percentage', value: '', limit: '' });
                               }
                             }}
-                            className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white rounded-lg text-sm font-medium"
+                            className="p-1.5 bg-orange-600 hover:bg-orange-500 text-white rounded-lg transition-colors flex items-center justify-center"
+                            title="Add Promo Code"
                           >
-                            Add
+                            <Plus className="w-4 h-4" />
                           </button>
                         </div>
 
@@ -3843,6 +4395,11 @@ export default function App() {
                                 <span className="text-slate-400 text-xs">
                                   (-{code.value}{code.type === 'percentage' ? '%' : '₹'})
                                 </span>
+                                {code.usageLimit && (
+                                  <span className="text-[10px] text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded ml-1">
+                                    Limit: {code.usageLimit}
+                                  </span>
+                                )}
                               </div>
                               <button
                                 type="button"
@@ -3871,7 +4428,7 @@ export default function App() {
                       type="button"
                       onClick={() => {
                         const newQ: CustomQuestion = {
-                          id: crypto.randomUUID(),
+                          id: generateUUID(),
                           question: '',
                           type: 'text',
                           required: false
@@ -4059,213 +4616,215 @@ export default function App() {
               </form>
             </div>
           </div>
-        </div>
-      )}
+        </div >
+      )
+      }
 
       {/* REGISTER MODAL */}
-      {selectedEventForReg && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/90 backdrop-blur-2xl animate-in fade-in duration-300">
-          <div className="bg-slate-900 w-full h-full sm:h-auto sm:max-w-md sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-300">
-            <div className="bg-orange-600 p-6 text-white relative flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center border border-white/30 backdrop-blur-md">
-                  <CheckSquare className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <h3 className="text-xl font-black font-outfit tracking-tight">Permission Protocol</h3>
-                  <p className="text-[10px] text-white/70 font-bold uppercase tracking-widest truncate max-w-[200px]">{selectedEventForReg.title}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => { setSelectedEventForReg(null); setRegistrationAnswers({}); setTeamRegistrationData({ mode: 'individual', subMode: 'create', teamName: '', inviteCode: '' }); }}
-                className="absolute top-6 right-6 text-white/70 hover:text-white transition-colors"
-              >
-                <XCircle className="w-6 h-6" />
-              </button>
-            </div>
-
-            <form onSubmit={handleRegister} className="p-6 md:p-8 overflow-y-auto flex-1 custom-scrollbar">
-              {/* Participation Mode Choice */}
-              {selectedEventForReg.participationMode !== 'individual' && selectedEventForReg.maxTeamSize && (
-                <div className="mb-6 space-y-4">
-                  <label className="block text-sm font-medium text-slate-300 mb-2 font-outfit uppercase tracking-wider text-[11px]">Join As</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    {['individual', 'team'].map((m) => {
-                      if (selectedEventForReg.participationMode === 'team' && m === 'individual') return null;
-                      if (selectedEventForReg.participationMode === 'individual' && m === 'team') return null;
-                      return (
-                        <button
-                          key={m}
-                          type="button"
-                          onClick={() => setTeamRegistrationData(prev => ({ ...prev, mode: m as any }))}
-                          className={`py-3 px-4 rounded-xl border text-sm font-bold transition-all ${teamRegistrationData.mode === m
-                            ? 'bg-orange-900/40 border-orange-500 text-orange-400 shadow-lg shadow-orange-900/20 active:scale-95'
-                            : 'bg-slate-950 border-slate-700 text-slate-500 hover:border-slate-600 active:scale-95'
-                            }`}
-                        >
-                          {m === 'individual' ? <UserCircle className="w-4 h-4 mx-auto mb-1" /> : <Users className="w-4 h-4 mx-auto mb-1" />}
-                          {m === 'individual' ? 'Individually' : 'As a Team'}
-                        </button>
-                      );
-                    })}
+      {
+        selectedEventForReg && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/90 backdrop-blur-2xl animate-in fade-in duration-300">
+            <div className="bg-slate-900 w-full h-full sm:h-auto sm:max-w-md sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-300">
+              <div className="bg-orange-600 p-6 text-white relative flex-shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center border border-white/30 backdrop-blur-md">
+                    <CheckSquare className="w-6 h-6 text-white" />
                   </div>
+                  <div>
+                    <h3 className="text-xl font-black font-outfit tracking-tight">Permission Protocol</h3>
+                    <p className="text-[10px] text-white/70 font-bold uppercase tracking-widest truncate max-w-[200px]">{selectedEventForReg.title}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => { setSelectedEventForReg(null); setRegistrationAnswers({}); setTeamRegistrationData({ mode: 'individual', subMode: 'create', teamName: '', inviteCode: '' }); }}
+                  className="absolute top-6 right-6 text-white/70 hover:text-white transition-colors"
+                >
+                  <XCircle className="w-6 h-6" />
+                </button>
+              </div>
 
-                  {teamRegistrationData.mode === 'team' && (
-                    <div className="animate-in slide-in-from-top-2 duration-300 space-y-4 pt-2">
-                      <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800">
-                        <button
-                          type="button"
-                          onClick={() => setTeamRegistrationData(prev => ({ ...prev, subMode: 'create' }))}
-                          className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${teamRegistrationData.subMode === 'create' ? 'bg-orange-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-300'}`}
-                        >
-                          Create Team
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setTeamRegistrationData(prev => ({ ...prev, subMode: 'join' }))}
-                          className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${teamRegistrationData.subMode === 'join' ? 'bg-orange-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-300'}`}
-                        >
-                          Join Team
-                        </button>
+              <form onSubmit={handleRegister} className="p-6 md:p-8 overflow-y-auto flex-1 custom-scrollbar">
+                {/* Participation Mode Choice */}
+                {selectedEventForReg.participationMode !== 'individual' && selectedEventForReg.maxTeamSize && (
+                  <div className="mb-6 space-y-4">
+                    <label className="block text-sm font-medium text-slate-300 mb-2 font-outfit uppercase tracking-wider text-[11px]">Join As</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      {['individual', 'team'].map((m) => {
+                        if (selectedEventForReg.participationMode === 'team' && m === 'individual') return null;
+                        if (selectedEventForReg.participationMode === 'individual' && m === 'team') return null;
+                        return (
+                          <button
+                            key={m}
+                            type="button"
+                            onClick={() => setTeamRegistrationData(prev => ({ ...prev, mode: m as any }))}
+                            className={`py-3 px-4 rounded-xl border text-sm font-bold transition-all ${teamRegistrationData.mode === m
+                              ? 'bg-orange-900/40 border-orange-500 text-orange-400 shadow-lg shadow-orange-900/20 active:scale-95'
+                              : 'bg-slate-950 border-slate-700 text-slate-500 hover:border-slate-600 active:scale-95'
+                              }`}
+                          >
+                            {m === 'individual' ? <UserCircle className="w-4 h-4 mx-auto mb-1" /> : <Users className="w-4 h-4 mx-auto mb-1" />}
+                            {m === 'individual' ? 'Individually' : 'As a Team'}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {teamRegistrationData.mode === 'team' && (
+                      <div className="animate-in slide-in-from-top-2 duration-300 space-y-4 pt-2">
+                        <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => setTeamRegistrationData(prev => ({ ...prev, subMode: 'create' }))}
+                            className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${teamRegistrationData.subMode === 'create' ? 'bg-orange-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-300'}`}
+                          >
+                            Create Team
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setTeamRegistrationData(prev => ({ ...prev, subMode: 'join' }))}
+                            className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${teamRegistrationData.subMode === 'join' ? 'bg-orange-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-300'}`}
+                          >
+                            Join Team
+                          </button>
+                        </div>
+
+                        {teamRegistrationData.subMode === 'create' ? (
+                          <div>
+                            <label className="block text-xs font-medium text-slate-400 mb-1 uppercase">Team Name</label>
+                            <input
+                              required
+                              type="text"
+                              placeholder="My Awesome Team"
+                              className="w-full px-4 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 focus:ring-2 focus:ring-orange-500 outline-none transition-all"
+                              value={teamRegistrationData.teamName}
+                              onChange={e => setTeamRegistrationData(prev => ({ ...prev, teamName: e.target.value }))}
+                            />
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="block text-xs font-medium text-slate-400 mb-1 uppercase">Invite Code</label>
+                            <input
+                              required
+                              type="text"
+                              placeholder="ABC123"
+                              className="w-full px-4 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 focus:ring-2 focus:ring-orange-500 outline-none uppercase transition-all"
+                              value={teamRegistrationData.inviteCode}
+                              onChange={e => setTeamRegistrationData(prev => ({ ...prev, inviteCode: e.target.value.toUpperCase() }))}
+                            />
+                          </div>
+                        )}
                       </div>
+                    )}
+                  </div>
+                )}
+                <p className="text-slate-400 mb-6 font-outfit">
+                  You are registering as <span className="font-semibold text-white">{currentUser.name}</span> ({currentUser.email}).
+                </p>
 
-                      {teamRegistrationData.subMode === 'create' ? (
-                        <div>
-                          <label className="block text-xs font-medium text-slate-400 mb-1 uppercase">Team Name</label>
+                {/* Custom Questions Display */}
+                {selectedEventForReg.customQuestions && selectedEventForReg.customQuestions.length > 0 && (
+                  <div className="space-y-4 mb-6 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
+                    {selectedEventForReg.customQuestions.map(q => (
+                      <div key={q.id}>
+                        <label className="block text-sm font-medium text-slate-300 mb-1 font-outfit">
+                          {q.question} {q.required && <span className="text-red-400">*</span>}
+                        </label>
+
+                        {q.type === 'text' && (
                           <input
-                            required
                             type="text"
-                            placeholder="My Awesome Team"
-                            className="w-full px-4 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 focus:ring-2 focus:ring-orange-500 outline-none transition-all"
-                            value={teamRegistrationData.teamName}
-                            onChange={e => setTeamRegistrationData(prev => ({ ...prev, teamName: e.target.value }))}
+                            required={q.required}
+                            value={registrationAnswers[q.id] || ''}
+                            className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 focus:ring-2 focus:ring-orange-500 outline-none transition-all"
+                            onChange={e => setRegistrationAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
                           />
-                        </div>
-                      ) : (
-                        <div>
-                          <label className="block text-xs font-medium text-slate-400 mb-1 uppercase">Invite Code</label>
-                          <input
-                            required
-                            type="text"
-                            placeholder="ABC123"
-                            className="w-full px-4 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 focus:ring-2 focus:ring-orange-500 outline-none uppercase transition-all"
-                            value={teamRegistrationData.inviteCode}
-                            onChange={e => setTeamRegistrationData(prev => ({ ...prev, inviteCode: e.target.value.toUpperCase() }))}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-              <p className="text-slate-400 mb-6 font-outfit">
-                You are registering as <span className="font-semibold text-white">{currentUser.name}</span> ({currentUser.email}).
-              </p>
+                        )}
 
-              {/* Custom Questions Display */}
-              {selectedEventForReg.customQuestions && selectedEventForReg.customQuestions.length > 0 && (
-                <div className="space-y-4 mb-6 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
-                  {selectedEventForReg.customQuestions.map(q => (
-                    <div key={q.id}>
-                      <label className="block text-sm font-medium text-slate-300 mb-1 font-outfit">
-                        {q.question} {q.required && <span className="text-red-400">*</span>}
-                      </label>
+                        {q.type === 'boolean' && (
+                          <div className="flex gap-4">
+                            <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                              <input
+                                type="radio"
+                                name={q.id}
+                                value="yes"
+                                required={q.required}
+                                checked={registrationAnswers[q.id] === 'Yes'}
+                                onChange={e => setRegistrationAnswers(prev => ({ ...prev, [q.id]: 'Yes' }))}
+                                className="w-4 h-4 text-orange-500 focus:ring-orange-500 bg-slate-950 border-slate-700"
+                              />
+                              Yes
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                              <input
+                                type="radio"
+                                name={q.id}
+                                value="no"
+                                required={q.required}
+                                checked={registrationAnswers[q.id] === 'No'}
+                                onChange={e => setRegistrationAnswers(prev => ({ ...prev, [q.id]: 'No' }))}
+                                className="w-4 h-4 text-orange-600 focus:ring-orange-500 bg-slate-950 border-slate-700"
+                              />
+                              No
+                            </label>
+                          </div>
+                        )}
 
-                      {q.type === 'text' && (
-                        <input
-                          type="text"
-                          required={q.required}
-                          value={registrationAnswers[q.id] || ''}
-                          className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 focus:ring-2 focus:ring-orange-500 outline-none transition-all"
-                          onChange={e => setRegistrationAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
-                        />
-                      )}
+                        {q.type === 'select' && (
+                          <select
+                            required={q.required}
+                            value={registrationAnswers[q.id] || ''}
+                            className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 focus:ring-2 focus:ring-orange-500 outline-none transition-all"
+                            onChange={e => setRegistrationAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
+                          >
+                            <option value="" disabled>Select an option</option>
+                            {q.options?.map(opt => (
+                              <option key={opt} value={opt}>{opt}</option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
 
-                      {q.type === 'boolean' && (
-                        <div className="flex gap-4">
-                          <label className="flex items-center gap-2 cursor-pointer text-slate-300">
-                            <input
-                              type="radio"
-                              name={q.id}
-                              value="yes"
-                              required={q.required}
-                              checked={registrationAnswers[q.id] === 'Yes'}
-                              onChange={e => setRegistrationAnswers(prev => ({ ...prev, [q.id]: 'Yes' }))}
-                              className="w-4 h-4 text-orange-500 focus:ring-orange-500 bg-slate-950 border-slate-700"
-                            />
-                            Yes
-                          </label>
-                          <label className="flex items-center gap-2 cursor-pointer text-slate-300">
-                            <input
-                              type="radio"
-                              name={q.id}
-                              value="no"
-                              required={q.required}
-                              checked={registrationAnswers[q.id] === 'No'}
-                              onChange={e => setRegistrationAnswers(prev => ({ ...prev, [q.id]: 'No' }))}
-                              className="w-4 h-4 text-orange-600 focus:ring-orange-500 bg-slate-950 border-slate-700"
-                            />
-                            No
-                          </label>
-                        </div>
-                      )}
-
-                      {q.type === 'select' && (
-                        <select
-                          required={q.required}
-                          value={registrationAnswers[q.id] || ''}
-                          className="w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 focus:ring-2 focus:ring-orange-500 outline-none transition-all"
-                          onChange={e => setRegistrationAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
-                        >
-                          <option value="" disabled>Select an option</option>
-                          {q.options?.map(opt => (
-                            <option key={opt} value={opt}>{opt}</option>
-                          ))}
-                        </select>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Payment Info */}
-              {selectedEventForReg.isPaid && (
-                <div className="mb-6 animate-in slide-in-from-top-2">
-                  <div className="p-4 bg-slate-950 rounded-xl border border-slate-700/50 mb-4">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="text-slate-400 text-sm">Ticket Price</span>
-                      <span className="text-white font-medium">₹{selectedEventForReg.price}</span>
-                    </div>
-                    <div className="mt-2 text-[10px] text-slate-400 text-right opacity-80">
-                      Payment will be collected after organizer approval
+                {/* Payment Info */}
+                {selectedEventForReg.isPaid && (
+                  <div className="mb-6 animate-in slide-in-from-top-2">
+                    <div className="p-4 bg-slate-950 rounded-xl border border-slate-700/50 mb-4">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-slate-400 text-sm">Ticket Price</span>
+                        <span className="text-white font-medium">₹{selectedEventForReg.price}</span>
+                      </div>
+                      <div className="mt-2 text-[10px] text-slate-400 text-right opacity-80">
+                        Payment will be collected after organizer approval
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              <div className="flex gap-3 mt-8">
-                <button
-                  type="button"
-                  onClick={() => { setSelectedEventForReg(null); setRegistrationAnswers({}); setAppliedPromoCode(null); }}
-                  className="flex-1 bg-slate-800 border border-slate-700 text-slate-300 font-semibold py-3 rounded-xl hover:bg-slate-700 transition-all font-outfit"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isRegistering}
-                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2 font-outfit shadow-lg shadow-orange-600/20 active:scale-95"
-                >
-                  {isRegistering ? <Loader2 className="w-5 h-5 animate-spin" /> :
-                    selectedEventForReg.isPaid ?
-                      'Submit Registration' : 'Confirm Registration'
-                  }
-                </button>
-              </div>
-            </form>
+                <div className="flex gap-3 mt-8">
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedEventForReg(null); setRegistrationAnswers({}); setAppliedPromoCode(null); }}
+                    className="flex-1 bg-slate-800 border border-slate-700 text-slate-300 font-semibold py-3 rounded-xl hover:bg-slate-700 transition-all font-outfit"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isRegistering}
+                    className="flex-1 bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2 font-outfit shadow-lg shadow-orange-600/20 active:scale-95"
+                  >
+                    {isRegistering ? <Loader2 className="w-5 h-5 animate-spin" /> :
+                      selectedEventForReg.isPaid ?
+                        'Submit Registration' : 'Confirm Registration'
+                    }
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )
+        )
       }
 
       {/* Payment Details Modal would be nice, but we are doing inline */}
@@ -4583,87 +5142,92 @@ export default function App() {
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: 0.5 }}
-                    className="space-y-1.5"
+                    className="space-y-2"
                   >
-                    <label className="text-xs font-bold text-slate-400 ml-1">Phone Number</label>
+                    <div className="flex items-center justify-between ml-1">
+                      <label className="text-xs font-bold text-slate-400">Phone Number</label>
+                      {profileForm.isPhoneVerified ? (
+                        <span className="text-[10px] text-green-400 font-bold flex items-center gap-1 bg-green-500/10 px-2 py-0.5 rounded-full border border-green-500/20">
+                          <CheckCircle className="w-3 h-3" /> Verified
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-amber-400 font-medium">Verification required</span>
+                      )}
+                    </div>
+
                     <div className="flex gap-2 relative">
-                      <div className="relative flex-1">
-                        <motion.input
-                          whileFocus={{ scale: 1.02, backgroundColor: currentUser?.phoneNumber ? "rgba(20, 83, 45, 0.1)" : "rgba(30, 41, 59, 1)" }}
-                          type="tel"
-                          disabled={!!currentUser?.phoneNumber}
-                          className={`w-full pl-4 ${profileForm.isPhoneVerified ? 'pr-12' : 'pr-4'} py-3.5 rounded-2xl bg-[#1e293b] border text-white font-mono font-medium outline-none transition-all ${currentUser?.phoneNumber
-                            ? 'border-green-500/30 bg-green-900/10 text-green-200'
-                            : 'border-slate-700/50 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20'
-                            }`}
-                          value={profileForm.phoneNumber || ''}
-                          onChange={e => setProfileForm({ ...profileForm, phoneNumber: e.target.value, isPhoneVerified: false })}
-                          placeholder="+1234567890"
-                        />
-                        <AnimatePresence>
-                          {profileForm.isPhoneVerified && (
-                            <motion.div
-                              initial={{ scale: 0, opacity: 0 }}
-                              animate={{ scale: 1, opacity: 1 }}
-                              exit={{ scale: 0, opacity: 0 }}
-                              className="absolute right-4 top-1/2 -translate-y-1/2 text-green-500"
-                            >
-                              <CheckCircle className="w-5 h-5 fill-green-500/20" />
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
+                      {/* Country Code Selector */}
+                      <div className="relative w-36 shrink-0">
+                        <select
+                          disabled={isSendingProfilePhoneOtp || isVerifyingProfilePhoneOtp || !!currentUser?.phoneNumber}
+                          value={profileDialCode}
+                          onChange={e => {
+                            setProfileDialCode(e.target.value);
+                            const newFull = `${e.target.value}${profileNationalNumber.replace(/[^0-9]/g, '')}`;
+                            setProfileForm(prev => ({
+                              ...prev,
+                              phoneNumber: newFull,
+                              isPhoneVerified: newFull === currentUser?.phoneNumber
+                            }));
+                          }}
+                          className="w-full h-full px-3 py-3.5 rounded-2xl border border-slate-700/60 bg-[#1e293b] text-white font-mono text-xs font-bold outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 appearance-none cursor-pointer pr-7 disabled:opacity-50"
+                        >
+                          {COUNTRY_CODES.map(c => (
+                            <option key={c.code} value={c.dialCode} className="bg-[#0f172a] text-white py-1.5">
+                              {c.name} ({c.dialCode})
+                            </option>
+                          ))}
+                        </select>
+
+                        <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                       </div>
 
-                      <AnimatePresence>
-                        {!currentUser?.phoneNumber && !profileForm.isPhoneVerified && profileForm.phoneNumber && (
-                          <motion.button
-                            initial={{ opacity: 0, x: 20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            exit={{ opacity: 0, x: 20 }}
-                            type="button"
-                            disabled={authLoading}
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
-                            onClick={async () => {
-                              if (authLoading) return;
-                              if (!profileForm.phoneNumber) return;
-                              if (profileForm.phoneNumber === currentUser.phoneNumber) {
-                                setProfileForm({ ...profileForm, isPhoneVerified: true });
-                                return;
-                              }
+                      {/* National Phone Input */}
+                      <div className="relative flex-1">
+                        <input
+                          type="tel"
+                          inputMode="numeric"
+                          disabled={!!currentUser?.phoneNumber}
+                          placeholder="98765 43210"
+                          value={profileNationalNumber}
+                          onChange={e => {
+                            const val = e.target.value.replace(/[^0-9\s-]/g, '');
+                            setProfileNationalNumber(val);
+                            const newFullPhone = `${profileDialCode}${val.replace(/[^0-9]/g, '')}`;
+                            setProfileForm(prev => ({
+                              ...prev,
+                              phoneNumber: newFullPhone,
+                              isPhoneVerified: newFullPhone === currentUser?.phoneNumber
+                            }));
+                          }}
+                          className={`w-full pl-4 pr-4 py-3.5 rounded-2xl bg-[#1e293b] border text-white font-mono font-medium outline-none transition-all ${
+                            profileForm.isPhoneVerified
+                              ? 'border-green-500/40 bg-green-950/20 text-green-200'
+                              : 'border-slate-700/60 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20'
+                          } disabled:opacity-60 disabled:cursor-not-allowed`}
+                        />
+                      </div>
 
-                              const exists = await checkPhoneNumberExists(profileForm.phoneNumber);
-                              if (exists) {
-                                addToast('Phone number already in use by another account', 'error');
-                                return;
-                              }
-
-                              if (!profileForm.phoneNumber.startsWith('+')) {
-                                addToast('Please include country code (e.g., +1 for US)', 'error');
-                                return;
-                              }
-
-                              setAuthLoading(true);
-                              try {
-                                const appVerifier = initRecaptcha('persistent-profile-recaptcha');
-                                const confirmation = await signInWithPhone(profileForm.phoneNumber, appVerifier);
-                                setConfirmationResult(confirmation);
-                                setOtpPurpose('profile');
-                                setShowOtpInput(true);
-                                addToast('OTP Sent', 'success');
-                              } catch (e: any) {
-                                console.error(e);
-                                addToast(`Failed to send OTP: ${e.message}`, 'error');
-                              } finally {
-                                setAuthLoading(false);
-                              }
-                            }}
-                            className="px-4 rounded-2xl bg-orange-600 text-white font-bold text-xs hover:bg-orange-700 shadow-lg shadow-orange-900/20 whitespace-nowrap"
-                          >
-                            Verify
-                          </motion.button>
-                        )}
-                      </AnimatePresence>
+                      {/* Verify Button (Twilio SMS) */}
+                      {!currentUser?.phoneNumber && !profileForm.isPhoneVerified && profileNationalNumber.trim().length >= 5 && (
+                        <motion.button
+                          initial={{ opacity: 0, scale: 0.9 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          type="button"
+                          disabled={isSendingProfilePhoneOtp || isVerifyingProfilePhoneOtp}
+                          onClick={handleSendProfilePhoneOtp}
+                          className="px-4 rounded-2xl bg-gradient-to-r from-orange-600 to-orange-500 text-white font-bold text-xs hover:from-orange-500 hover:to-orange-400 shadow-lg shadow-orange-900/30 whitespace-nowrap cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                        >
+                          {isSendingProfilePhoneOtp ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Sending...</span>
+                            </>
+                          ) : (
+                            <span>Verify via SMS</span>
+                          )}
+                        </motion.button>
+                      )}
                     </div>
 
                     {currentUser?.phoneNumber ? (
@@ -4671,105 +5235,100 @@ export default function App() {
                         <Shield className="w-3 h-3" /> Verified phone number cannot be changed.
                       </p>
                     ) : (
-                      <p className="text-[10px] text-slate-500 ml-1">Include country code (e.g. +1...)</p>
+                      <p className="text-[10px] text-slate-500 ml-1">Select your country code and enter your mobile number.</p>
                     )}
 
+                    {/* OTP Entry when OTP dispatched */}
                     <AnimatePresence>
-                      {showOtpInput && (otpPurpose === 'deletion' || !profileForm.isPhoneVerified) && (
+                      {showOtpInput && otpPurpose === 'profile' && !profileForm.isPhoneVerified && (
                         <motion.div
                           initial={{ height: 0, opacity: 0 }}
                           animate={{ height: 'auto', opacity: 1 }}
                           exit={{ height: 0, opacity: 0 }}
-                          className="mt-3 flex gap-2 overflow-hidden"
+                          className="pt-2"
                         >
-                          <input
-                            type="text"
-                            className="flex-1 px-4 py-2.5 rounded-xl bg-[#020617] border border-orange-500/50 text-orange-500 font-mono text-center tracking-[0.5em] font-bold focus:ring-2 focus:ring-orange-500/20 outline-none"
-                            placeholder="OTP"
-                            value={otp}
-                            onChange={e => setOtp(e.target.value)}
-                            autoFocus
-                          />
-                          <motion.button
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
-                            type="button"
-                            onClick={async () => {
-                              if (otpPurpose === 'deletion') {
-                                await handleConfirmDeletion();
-                              } else {
-                                try {
-                                  await confirmationResult.confirm(otp);
-                                  setProfileForm(prev => ({ ...prev, isPhoneVerified: true }));
-                                  setShowOtpInput(false);
-                                  setOtp('');
-                                  addToast('Phone number verified!', 'success');
-                                } catch (e) {
-                                  addToast('Invalid OTP', 'error');
-                                }
-                              }
-                            }}
-                            className="px-6 py-2.5 bg-green-500 hover:bg-green-600 rounded-xl text-white font-bold text-xs shadow-lg shadow-green-900/20"
-                          >
-                            Confirm
-                          </motion.button>
+                          <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-orange-500/30 space-y-2.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-orange-400 flex items-center gap-1.5">
+                                <KeyRound className="w-3.5 h-3.5" /> Enter 6-Digit SMS Code
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                Sent to {profileDialCode}{profileNationalNumber.replace(/[^0-9]/g, '')}
+                              </span>
+                            </div>
+
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                maxLength={6}
+                                placeholder="••••••"
+                                value={otp}
+                                onChange={e => setOtp(e.target.value.replace(/[^0-9]/g, ''))}
+                                className="flex-1 px-4 py-2.5 rounded-xl bg-[#020617] border border-orange-500/50 text-white font-mono text-center tracking-[0.5em] font-bold text-lg focus:ring-2 focus:ring-orange-500/30 outline-none"
+                                autoFocus
+                              />
+                              <button
+                                type="button"
+                                disabled={isVerifyingProfilePhoneOtp || otp.length < 4}
+                                onClick={handleVerifyProfilePhoneOtp}
+                                className="px-5 py-2.5 bg-green-600 hover:bg-green-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-green-900/30 transition-all disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                              >
+                                {isVerifyingProfilePhoneOtp ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <span>Verifying...</span>
+                                  </>
+                                ) : (
+                                  <span>Confirm</span>
+                                )}
+                              </button>
+                            </div>
+                          </div>
                         </motion.div>
                       )}
                     </AnimatePresence>
                   </motion.div>
+
                 </div>
 
-                <AnimatePresence>
-                  {!showOtpInput && (
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ delay: 0.6 }}
-                      className="mt-6 pt-5 border-t border-slate-800/50"
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.6 }}
+                  className="mt-6 pt-5 border-t border-slate-800/50"
+                >
+                  <div className="flex items-center justify-between group/danger">
+                    <div>
+                      <h4 className="text-xs font-bold text-red-500 uppercase tracking-wider group-hover/danger:text-red-400 transition-colors">Danger Zone</h4>
+                      <p className="text-[10px] text-slate-500 mt-1 font-medium">Permanently delete your account and all data</p>
+                    </div>
+                    <motion.button
+                      whileHover={{ scale: 1.03 }}
+                      whileTap={{ scale: 0.97 }}
+                      type="button"
+                      disabled={isSendingDeleteOtp}
+                      onClick={() => handleOpenDeleteModal()}
+                      className="px-4 py-2.5 rounded-xl text-xs font-bold border transition-all bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20 hover:border-red-500/50 cursor-pointer disabled:opacity-60 flex items-center gap-2"
                     >
-                      <div className="flex items-center justify-between group/danger">
-                        <div>
-                          <h4 className="text-xs font-bold text-red-500 uppercase tracking-wider group-hover/danger:text-red-400 transition-colors">Danger Zone</h4>
-                          <p className="text-[10px] text-slate-500 mt-1 font-medium">Permanently delete your account and all data</p>
-                        </div>
-                        <motion.button
-                          whileHover={{ scale: 1.05, backgroundColor: "rgba(239, 68, 68, 0.2)" }}
-                          whileTap={{ scale: 0.95 }}
-                          type="button"
-                          disabled={authLoading}
-                          onClick={() => {
-                            if (!currentUser?.phoneNumber) {
-                              addToast('Please add and verify a phone number first to enable account deletion.', 'warning');
-                              return;
-                            }
-                            if (confirm('Are you sure? This will permanently delete your account, events, and registrations. You will be logged out immediately.')) {
-                              handleSendDeleteOtp();
-                            }
-                          }}
-                          className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all ${!currentUser?.phoneNumber
-                            ? 'bg-slate-800/50 border-slate-800 text-slate-600 cursor-not-allowed'
-                            : 'bg-red-500/10 border-red-500/20 text-red-500'
-                            }`}
-                        >
-                          Delete Account
-                        </motion.button>
-                      </div>
-                      {!currentUser?.phoneNumber && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          className="mt-3 flex items-start gap-2 p-3 rounded-xl bg-amber-500/5 border border-amber-500/10"
-                        >
-                          <AlertCircle className="w-4 h-4 text-amber-500/70 flex-shrink-0 mt-0.5" />
-                          <p className="text-[10px] text-amber-500/70 leading-relaxed">
-                            Phone verification is required for secure account deletion to prevent unauthorized access.
-                          </p>
-                        </motion.div>
+                      {isSendingDeleteOtp ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-red-400" />
+                          <span>Sending OTP...</span>
+                        </>
+                      ) : (
+                        <span>Delete Account</span>
                       )}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                    </motion.button>
+                  </div>
+                  <div className="mt-3 flex items-start gap-2 p-2.5 rounded-xl bg-slate-900/60 border border-slate-800/60">
+                    <Mail className="w-3.5 h-3.5 text-slate-400 flex-shrink-0 mt-0.5" />
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Requires verification via a 6-digit OTP code sent to <span className="text-slate-300 font-mono font-medium">{currentUser?.email}</span>.
+                    </p>
+                  </div>
+                </motion.div>
 
                 <div className="pt-4 flex gap-4">
                   <motion.button
@@ -4796,6 +5355,142 @@ export default function App() {
           </div>
         )
       }
+
+      {/* Account Deletion Email Verification Modal */}
+      <AnimatePresence>
+        {isDeleteModalOpen && currentUser && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-[#020617]/80 backdrop-blur-xl selection:bg-orange-500/30">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="bg-[#0f172a] w-full max-w-[440px] rounded-[32px] shadow-[0_0_60px_-15px_rgba(0,0,0,0.8)] border border-slate-700/60 overflow-hidden flex flex-col relative p-7 md:p-8 text-left group/modal"
+            >
+              {/* Decorative top accent gradients */}
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-1 bg-gradient-to-r from-transparent via-red-500 to-transparent opacity-70" />
+              <div className="absolute top-0 inset-x-0 h-36 bg-gradient-to-b from-red-500/10 to-transparent pointer-events-none" />
+
+              {/* Close Button */}
+              <motion.button
+                whileHover={{ scale: 1.1, rotate: 90 }}
+                whileTap={{ scale: 0.9 }}
+                type="button"
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setDeleteEmailOtp('');
+                }}
+                className="absolute top-6 right-6 text-slate-400 hover:text-white p-2 rounded-full hover:bg-white/10 transition-colors z-20 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </motion.button>
+
+              {/* Header Icon & Title */}
+              <div className="text-center mb-6 relative z-10">
+                <div className="w-16 h-16 bg-red-500/10 border border-red-500/30 rounded-2xl flex items-center justify-center mx-auto mb-4 text-red-500 shadow-lg shadow-red-950/40">
+                  <AlertTriangle className="w-8 h-8 text-red-500" />
+                </div>
+                <h3 className="text-2xl font-black text-white font-outfit tracking-tight">Confirm Account Deletion</h3>
+                <p className="text-xs text-slate-400 mt-2">
+                  Enter the 6-digit verification code sent to:
+                </p>
+                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-[#1e293b] border border-slate-700/70 rounded-full text-xs font-mono text-orange-400 font-semibold mt-2.5 shadow-inner">
+                  <Mail className="w-3.5 h-3.5 text-orange-400" />
+                  <span>{currentUser.email}</span>
+                </div>
+              </div>
+
+              {/* OTP Form */}
+              <div className="space-y-4 relative z-10">
+                <div>
+                  <div className="flex justify-between items-center mb-2 px-1">
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                      Verification Code
+                    </label>
+                    <span className="text-[10px] text-slate-500 font-mono">6 Digits</span>
+                  </div>
+                  
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={6}
+                    autoFocus
+                    placeholder="123456"
+                    value={deleteEmailOtp}
+                    onChange={(e) => setDeleteEmailOtp(e.target.value.replace(/[^0-9]/g, ''))}
+                    className="w-full px-4 py-3.5 rounded-2xl bg-[#1e293b] border border-slate-700 text-white font-mono text-center tracking-[0.5em] font-bold text-2xl focus:border-red-500 focus:ring-2 focus:ring-red-500/20 outline-none transition-all placeholder:text-slate-600 shadow-inner"
+                  />
+                </div>
+
+                {/* Warning Alert Box */}
+                <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-3.5 flex items-start gap-3">
+                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-200/90 leading-relaxed font-medium">
+                    <strong className="text-red-300">Permanent Action:</strong> All your tickets, event registrations, hosted events, and account data will be permanently wiped.
+                  </p>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex gap-3 pt-2">
+                  <motion.button
+                    whileHover={{ scale: 1.02, backgroundColor: "rgba(51, 65, 85, 1)" }}
+                    whileTap={{ scale: 0.98 }}
+                    type="button"
+                    disabled={isConfirmingDelete || isSendingDeleteOtp}
+                    onClick={() => {
+                      setIsDeleteModalOpen(false);
+                      setDeleteEmailOtp('');
+                    }}
+                    className="flex-1 py-3.5 rounded-2xl bg-[#1e293b] text-slate-300 font-bold text-xs uppercase tracking-wider border border-slate-700/60 transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </motion.button>
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    type="button"
+                    disabled={isConfirmingDelete || isSendingDeleteOtp || deleteEmailOtp.length < 6}
+                    onClick={handleConfirmEmailDeletion}
+                    className="flex-1 py-3.5 rounded-2xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider transition-all shadow-xl shadow-red-600/25 flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    {isConfirmingDelete ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Deleting...</span>
+                      </>
+                    ) : (
+                      <span>Verify & Delete</span>
+                    )}
+                  </motion.button>
+                </div>
+
+                {/* Resend Link */}
+                <div className="text-center pt-2">
+                  <button
+                    type="button"
+                    disabled={isSendingDeleteOtp || isConfirmingDelete}
+                    onClick={handleSendDeleteEmailOtp}
+                    className="text-xs text-slate-400 hover:text-orange-400 font-medium transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {isSendingDeleteOtp ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Sending code...</span>
+                      </>
+                    ) : (
+                      <span>Didn't receive code? <strong className="text-orange-400 hover:underline">Resend Code</strong></span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+
+
 
       {/* REGISTRATION DETAILS MODAL */}
       {
@@ -4956,6 +5651,35 @@ export default function App() {
                     )}
 
                     <div className="pt-6 mt-4 border-t border-slate-800 space-y-3">
+                      {selectedRegistrationDetails.participationType === 'team' && 
+                       selectedRegistrationDetails.isTeamLeader && 
+                       selectedRegistrationDetails.status === RegistrationStatus.TEAM_AWAITING_SUBMISSION && (
+                        (() => {
+                          const event = events.find(e => e.id === selectedRegistrationDetails.eventId);
+                          const membersCount = registrations.filter(r => r.teamId === selectedRegistrationDetails.teamId && r.status !== RegistrationStatus.REJECTED).length;
+                          const minSize = event?.minTeamSize || 1;
+                          const isIncomplete = membersCount < minSize;
+                          
+                          return (
+                            <div className="space-y-2">
+                              <button
+                                disabled={isIncomplete}
+                                onClick={() => selectedRegistrationDetails.teamId && handleTeamSubmit(selectedRegistrationDetails.teamId)}
+                                className={`w-full flex items-center justify-center gap-3 font-black font-outfit py-4 rounded-2xl transition-all shadow-lg group/submit ${isIncomplete ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-orange-600 hover:bg-orange-700 text-white shadow-orange-600/20'}`}
+                              >
+                                {isIncomplete ? <AlertCircle className="w-5 h-5 text-amber-500" /> : <CheckCircle className="w-5 h-5 group-hover/submit:scale-110 transition-transform" />}
+                                {isIncomplete ? 'Complete Team to Submit' : 'Submit Team for Approval'}
+                              </button>
+                              {isIncomplete && (
+                                <p className="text-[10px] text-center text-amber-500 font-bold uppercase tracking-wider animate-pulse">
+                                  {minSize - membersCount} more member{minSize - membersCount !== 1 ? 's' : ''} required to finalize (Min: {minSize})
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()
+                      )}
+
                       {selectedRegistrationDetails.status === RegistrationStatus.APPROVED && (
                         <button
                           onClick={() => {
@@ -5229,518 +5953,559 @@ export default function App() {
       }
 
       {/* EVENT DETAILS MODAL */}
-      {selectedEventForDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
-          <div className="bg-slate-900 w-full h-full sm:h-auto sm:max-h-[90vh] sm:max-w-2xl sm:rounded-3xl shadow-2xl border-none sm:border sm:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col relative">
-            <div className="relative h-56 sm:h-64 flex-shrink-0">
-              <LazyEventImage eventId={selectedEventForDetails.id} initialSrc={selectedEventForDetails.imageUrl} alt={selectedEventForDetails.title} className="w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-black/20"></div>
-              <button
-                onClick={() => setSelectedEventForDetails(null)}
-                className="absolute top-4 right-4 p-2 bg-black/60 hover:bg-black/80 backdrop-blur-md rounded-full text-white transition-all border border-white/20 z-50 shadow-lg group"
-              >
-                <X className="w-5 h-5 group-hover:rotate-90 transition-transform" />
-              </button>
+      {
+        selectedEventForDetails && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
+            <div className="bg-slate-900 w-full h-full sm:h-auto sm:max-h-[90vh] sm:max-w-2xl sm:rounded-3xl shadow-2xl border-none sm:border sm:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col relative">
+              <div className="relative h-56 sm:h-64 flex-shrink-0">
+                <LazyEventImage eventId={selectedEventForDetails.id} initialSrc={selectedEventForDetails.imageUrl} alt={selectedEventForDetails.title} className="w-full h-full object-cover" />
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-black/20"></div>
+                <button
+                  onClick={() => setSelectedEventForDetails(null)}
+                  className="absolute top-4 right-4 p-2 bg-black/60 hover:bg-black/80 backdrop-blur-md rounded-full text-white transition-all border border-white/20 z-50 shadow-lg group"
+                >
+                  <X className="w-5 h-5 group-hover:rotate-90 transition-transform" />
+                </button>
 
-              <div className="absolute bottom-4 sm:bottom-6 left-6 sm:left-8 right-6 sm:right-8">
-                <div className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest w-fit mb-2 sm:mb-3 ${selectedEventForDetails.locationType === 'online' ? 'bg-orange-600 text-white' : 'bg-slate-700 text-slate-100'}`}>
-                  {selectedEventForDetails.locationType} Event
+                <div className="absolute bottom-4 sm:bottom-6 left-6 sm:left-8 right-6 sm:right-8">
+                  <div className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest w-fit mb-2 sm:mb-3 ${selectedEventForDetails.locationType === 'online' ? 'bg-orange-600 text-white' : 'bg-slate-700 text-slate-100'}`}>
+                    {selectedEventForDetails.locationType} Event
+                  </div>
+                  <h2 className="text-2xl sm:text-3xl font-bold text-white font-outfit line-clamp-2">{selectedEventForDetails.title}</h2>
                 </div>
-                <h2 className="text-2xl sm:text-3xl font-bold text-white font-outfit line-clamp-2">{selectedEventForDetails.title}</h2>
               </div>
-            </div>
 
-            {/* Modal Tabs */}
-            <div className="flex bg-slate-800/50 p-1 mx-6 sm:mx-8 rounded-xl border border-slate-800/50 mt-4">
-              <button
-                onClick={() => setDetailsTab('info')}
-                className={`flex-1 py-1.5 rounded-lg text-sm font-bold transition-all ${detailsTab === 'info' ? 'bg-slate-700 text-orange-400 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-              >
-                Information
-              </button>
-              <button
-                onClick={() => setDetailsTab('discussion')}
-                className={`flex-1 py-1.5 rounded-lg text-sm font-bold transition-all ${detailsTab === 'discussion' ? 'bg-slate-700 text-orange-400 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-              >
-                Discussion
-              </button>
-              <button
-                onClick={() => setDetailsTab('reviews')}
-                className={`flex-1 py-1.5 rounded-lg text-sm font-bold transition-all ${detailsTab === 'reviews' ? 'bg-slate-700 text-orange-400 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-              >
-                Reviews
-              </button>
-            </div>
-
-            <div ref={scrollContainerRef} className="p-6 sm:p-8 overflow-y-auto custom-scrollbar flex-1">
-              {detailsTab === 'info' && (
-                <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-8 mb-8">
-                    <div className="space-y-4">
-                      <div className="flex items-center gap-3 text-slate-300">
-                        <div className="p-2 bg-orange-500/10 rounded-lg">
-                          <Calendar className="w-5 h-5 text-orange-400" />
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">Date & Time</p>
-                          {selectedEventForDetails.endDate && new Date(selectedEventForDetails.date).toDateString() !== new Date(selectedEventForDetails.endDate).toDateString() ? (
-                            <div className="flex flex-col gap-0.5 mt-0.5">
-                              <p className="text-sm font-medium">
-                                <span className="text-slate-400 text-[10px] uppercase tracking-wider mr-1.5 font-bold">Start:</span>
-                                {format(new Date(selectedEventForDetails.date), 'MMM d, yyyy')} at {format(new Date(selectedEventForDetails.date), 'p')}
-                              </p>
-                              <p className="text-sm font-medium">
-                                <span className="text-slate-400 text-[10px] uppercase tracking-wider mr-1.5 font-bold">End:</span>
-                                {format(new Date(selectedEventForDetails.endDate), 'MMM d, yyyy')} at {format(new Date(selectedEventForDetails.endDate), 'p')}
-                              </p>
-                            </div>
-                          ) : (
-                            <>
-                              <p className="text-sm sm:text-base font-medium">
-                                {format(new Date(selectedEventForDetails.date), 'EEEE, MMMM d, yyyy')}
-                              </p>
-                              <p className="text-xs sm:text-sm text-slate-400">
-                                {format(new Date(selectedEventForDetails.date), 'p')}
-                                {selectedEventForDetails.endDate && ` - ${format(new Date(selectedEventForDetails.endDate), 'p')}`}
-                              </p>
-                            </>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-3 text-slate-300">
-                        <div className="p-2 bg-orange-500/10 rounded-lg">
-                          <MapPin className="w-5 h-5 text-orange-400" />
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">Location</p>
-                          <div className="text-sm sm:text-base font-medium italic">
-                            {renderLocation(selectedEventForDetails.location, selectedEventForDetails.locationType)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <div className="flex items-center gap-3 text-slate-300">
-                        <div className="p-2 bg-orange-500/10 rounded-lg">
-                          <Users className="w-5 h-5 text-orange-400" />
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">Availability</p>
-                          <p className="text-sm sm:text-base font-medium">
-                            {(() => {
-                              const currentRegs = registrations.filter(r => r.eventId === selectedEventForDetails.id && r.status !== RegistrationStatus.REJECTED).length;
-                              const remaining = Math.max(0, Number(selectedEventForDetails.capacity) - currentRegs);
-                              return remaining === 0 ? 'Sold Out' : `${remaining} Available Spots`;
-                            })()}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-3 text-slate-300">
-                        <div className="p-2 bg-orange-500/10 rounded-lg">
-                          <CheckCircle className="w-5 h-5 text-orange-400" />
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">Registration</p>
-                          <p className="text-sm sm:text-base font-medium">
-                            {(() => {
-                              const isOpen = selectedEventForDetails.isRegistrationOpen !== false && new Date(selectedEventForDetails.date) > new Date();
-                              return <span className={isOpen ? "text-emerald-400" : "text-rose-400"}>{isOpen ? "Open" : "Closed"}</span>;
-                            })()}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="border-t border-slate-800 pt-6">
-                    <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-3">About this experience</p>
-                    <div className="bg-slate-800/30 rounded-2xl p-4 sm:p-6 border border-slate-800">
-                      <p className="text-sm sm:text-base text-slate-300 leading-relaxed whitespace-pre-line italic border-l-4 border-orange-500/30 pl-4">
-                        {selectedEventForDetails.description}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="border-t border-slate-800 pt-6 mt-6">
-                    <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-3">Share Event</p>
-                    <div className="flex flex-wrap gap-3">
-                      <button
-                        onClick={() => {
-                          const url = `${window.location.origin}/?event=${selectedEventForDetails.id}`;
-                          navigator.clipboard.writeText(url);
-                          addToast('Link copied to clipboard!', 'success');
-                        }}
-                        className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-medium transition-colors border border-slate-700"
-                      >
-                        <Copy className="w-4 h-4" /> Copy Link
-                      </button>
-                      <a
-                        href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(`Check out ${selectedEventForDetails.title} on Eventron!`)}&url=${encodeURIComponent(`${window.location.origin}/?event=${selectedEventForDetails.id}`)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 px-4 py-2 bg-[#1DA1F2]/10 hover:bg-[#1DA1F2]/20 text-[#1DA1F2] rounded-lg text-sm font-medium transition-colors border border-[#1DA1F2]/20"
-                      >
-                        <Twitter className="w-4 h-4" /> Twitter
-                      </a>
-                      <a
-                        href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(`${window.location.origin}/?event=${selectedEventForDetails.id}`)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 px-4 py-2 bg-[#1877F2]/10 hover:bg-[#1877F2]/20 text-[#1877F2] rounded-lg text-sm font-medium transition-colors border border-[#1877F2]/20"
-                      >
-                        <Facebook className="w-4 h-4" /> Facebook
-                      </a>
-                      <a
-                        href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(`${window.location.origin}/?event=${selectedEventForDetails.id}`)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 px-4 py-2 bg-[#0A66C2]/10 hover:bg-[#0A66C2]/20 text-[#0A66C2] rounded-lg text-sm font-medium transition-colors border border-[#0A66C2]/20"
-                      >
-                        <Linkedin className="w-4 h-4" /> LinkedIn
-                      </a>
-                    </div>
-                  </div>
-
-                  <div className="border-t border-slate-800 pt-6 mt-6">
-                    <div className="flex items-center justify-between mb-3">
-                      <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">Who's Going</p>
-                      <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full border border-slate-700">Approved</span>
-                    </div>
-                    {(() => {
-                      const approvedAttendees = registrations.filter(r => r.eventId === selectedEventForDetails.id && r.status === RegistrationStatus.APPROVED);
-
-                      if (approvedAttendees.length === 0) {
-                        return (
-                          <div className="bg-slate-800/30 rounded-2xl p-4 border border-slate-800 flex items-center gap-3">
-                            <div className="p-2 bg-slate-800 rounded-full text-slate-500">
-                              <Users className="w-4 h-4" />
-                            </div>
-                            <p className="text-sm text-slate-400 italic">No approved participants yet. Be the first!</p>
-                          </div>
-                        );
-                      }
-
-                      return (
-                        <div className="space-y-4">
-                          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
-                            {approvedAttendees.slice(0, 15).map((attendee) => (
-                              <ParticipantAvatar
-                                key={attendee.id}
-                                name={attendee.participantName}
-                                avatarUrl={attendee.participantAvatarUrl}
-                                userId={attendee.participantId}
-                              />
-                            ))}
-                          </div>
-                          {approvedAttendees.length > 15 && (
-                            <div className="text-center">
-                              <p className="text-xs text-slate-500 font-medium bg-slate-800/50 py-2 rounded-lg border border-slate-800">
-                                + {approvedAttendees.length - 15} more attendees
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </div>
-
-                  <div className="border-t border-slate-800 pt-6 mt-6">
-                    <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-3">Add to Calendar</p>
-                    <div className="flex flex-wrap gap-3">
-                      <a
-                        href={`https://www.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(selectedEventForDetails.title)}&dates=${format(new Date(selectedEventForDetails.date), "yyyyMMdd'T'HHmmss").replace(/-|:/g, '')}/${format(new Date(selectedEventForDetails.endDate), "yyyyMMdd'T'HHmmss").replace(/-|:/g, '')}&details=${encodeURIComponent(selectedEventForDetails.description)}&location=${encodeURIComponent(selectedEventForDetails.location)}&sf=true&output=xml`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 px-4 py-2 bg-orange-600/10 hover:bg-orange-600/20 text-orange-400 rounded-lg text-sm font-medium transition-colors border border-orange-600/20"
-                      >
-                        <CalendarPlus className="w-4 h-4" /> Google Calendar
-                      </a>
-                      <button
-                        onClick={() => {
-                          const event = selectedEventForDetails;
-                          const icsContent = [
-                            'BEGIN:VCALENDAR',
-                            'VERSION:2.0',
-                            'BEGIN:VEVENT',
-                            `SUMMARY:${event.title}`,
-                            `DESCRIPTION:${event.description.replace(/\n/g, '\\n')}`,
-                            `DTSTART:${format(new Date(event.date), "yyyyMMdd'T'HHmmss").replace(/-|:/g, '')}`,
-                            `DTEND:${format(new Date(event.endDate), "yyyyMMdd'T'HHmmss").replace(/-|:/g, '')}`,
-                            `LOCATION:${event.location}`,
-                            'END:VEVENT',
-                            'END:VCALENDAR'
-                          ].join('\n');
-
-                          const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
-                          const link = document.createElement('a');
-                          link.href = window.URL.createObjectURL(blob);
-                          link.setAttribute('download', `${event.title.replace(/\s+/g, '_')}.ics`);
-                          document.body.appendChild(link);
-                          link.click();
-                          document.body.removeChild(link);
-                        }}
-                        className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-medium transition-colors border border-slate-700"
-                      >
-                        <Download className="w-4 h-4" /> Download .ICS
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {detailsTab === 'discussion' && (
-                <div className="h-full flex flex-col min-h-[400px]">
-                  <div className="flex-1 space-y-4 mb-4 overflow-y-auto pr-2 custom-scrollbar">
-                    {isMessagesLoading ? (
-                      <div className="py-20 text-center">
-                        <Loader2 className="w-8 h-8 animate-spin text-slate-700 mx-auto" />
-                        <p className="text-slate-500 text-sm mt-3 font-medium">Loading conversations...</p>
-                      </div>
-                    ) : messages.length > 0 ? (
-                      messages.map(msg => (
-                        <div key={msg.id} className={`flex flex-col ${msg.userId === currentUser.id ? 'items-end' : 'items-start'}`}>
-                          <div className="flex items-baseline gap-2 mb-1 px-1">
-                            <span className="text-xs font-bold text-slate-300">{msg.userName}</span>
-                            <span className="text-[10px] text-slate-500">{format(new Date(msg.createdAt), 'h:mm a')}</span>
-                          </div>
-                          <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm shadow-sm ${msg.userId === currentUser.id
-                            ? 'bg-orange-600 text-white rounded-tr-none'
-                            : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700'
-                            }`}>
-                            {msg.content}
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="py-20 text-center">
-                        <MessageSquare className="w-12 h-12 text-slate-800 mx-auto mb-4" />
-                        <p className="text-slate-400 text-sm font-medium">No messages yet.</p>
-                        <p className="text-slate-500 text-xs mt-1">Be the first to start the discussion!</p>
-                      </div>
-                    )}
-                  </div>
-
-                  <form onSubmit={handleSendMessage} className="mt-auto pt-4 border-t border-slate-800 flex gap-2">
-                    <input
-                      type="text"
-                      className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-orange-600 focus:border-transparent outline-none transition-all shadow-inner"
-                      placeholder="Ask a question or say hi..."
-                      value={newMessageText}
-                      onChange={e => setNewMessageText(e.target.value)}
-                    />
-                    <button
-                      type="submit"
-                      disabled={!newMessageText.trim()}
-                      className="bg-orange-600 text-white p-3 rounded-xl hover:bg-orange-700 disabled:opacity-50 disabled:grayscale transition-all shadow-lg shadow-orange-600/20 active:scale-95 flex items-center justify-center group"
-                    >
-                      <Send className="w-5 h-5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                    </button>
-                  </form>
-                </div>
-              )}
-
-              {detailsTab === 'reviews' && (
-                <div className="h-full flex flex-col min-h-[400px]">
-                  {isReviewsLoading ? (
-                    <div className="py-20 text-center">
-                      <Loader2 className="w-8 h-8 animate-spin text-slate-700 mx-auto" />
-                      <p className="text-slate-500 text-sm mt-3 font-medium">Loading reviews...</p>
-                    </div>
-                  ) : (
-                    <>
-                      {/* Average Rating Section */}
-                      {reviews.length > 0 && (
-                        <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700 mb-6 flex items-center justify-between">
-                          <div>
-                            <div className="text-3xl font-bold text-white flex items-center gap-2">
-                              {(reviews.reduce((acc, curr) => acc + curr.rating, 0) / reviews.length).toFixed(1)}
-                              <Star className="w-6 h-6 text-amber-400 fill-amber-400" />
-                            </div>
-                            <p className="text-sm text-slate-400 mt-1">
-                              Average Rating based on {reviews.length} review{reviews.length !== 1 ? 's' : ''}
-                            </p>
-                          </div>
-                          <div className="flex flex-col gap-1 text-xs text-slate-500">
-                            {[5, 4, 3, 2, 1].map(r => {
-                              const count = reviews.filter(rev => rev.rating === r).length;
-                              const percentage = (count / reviews.length) * 100;
-                              return (
-                                <div key={r} className="flex items-center gap-2">
-                                  <span className="w-3">{r}</span>
-                                  <Star className="w-3 h-3 text-slate-600" />
-                                  <div className="w-24 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                                    <div className="h-full bg-amber-500" style={{ width: `${percentage}%` }} />
-                                  </div>
-                                  <span className="w-6 text-right">{count}</span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="flex-1 space-y-6 mb-6 overflow-y-auto pr-2 custom-scrollbar">
-                        {reviews.length > 0 ? (
-                          reviews.map(review => (
-                            <div key={review.id} className="bg-slate-800/50 p-4 rounded-xl border border-slate-800">
-                              <div className="flex justify-between items-start mb-2">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white">
-                                    {review.userName.charAt(0)}
-                                  </div>
-                                  <div>
-                                    <p className="text-sm font-bold text-slate-200">{review.userName}</p>
-                                    <p className="text-[10px] text-slate-500">{format(new Date(review.createdAt), 'MMM d, yyyy')}</p>
-                                  </div>
-                                </div>
-                                <div className="flex text-amber-400">
-                                  {[1, 2, 3, 4, 5].map(star => (
-                                    <Star key={star} className={`w-3 h-3 ${star <= review.rating ? 'fill-current' : 'text-slate-700'}`} />
-                                  ))}
-                                </div>
-                              </div>
-                              <p className="text-sm text-slate-300 italic">"{review.comment}"</p>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="py-16 text-center">
-                            <Star className="w-12 h-12 text-slate-800 mx-auto mb-4" />
-                            <p className="text-slate-400 text-sm font-medium">No reviews yet.</p>
-                            <p className="text-slate-500 text-xs mt-1">Attendees can leave reviews after the event.</p>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Review Form - Only for Attendees who have attended */}
-                      {currentUser.role === 'attendee' &&
-                        registrations.some(r =>
-                          r.eventId === selectedEventForDetails.id &&
-                          r.participantEmail === currentUser.email &&
-                          r.status === RegistrationStatus.APPROVED &&
-                          (r.attended || new Date(selectedEventForDetails.date) < new Date())
-                        ) &&
-                        !reviews.some(r => r.userId === currentUser.id) && (
-                          <form onSubmit={handleSubmitReview} className="mt-auto pt-6 border-t border-slate-800">
-                            <h4 className="text-sm font-bold text-white mb-3">Leave a Review</h4>
-                            <div className="flex gap-2 mb-3">
-                              {[1, 2, 3, 4, 5].map(s => (
-                                <button
-                                  key={s}
-                                  type="button"
-                                  onClick={() => setRating(s)}
-                                  className="focus:outline-none transition-transform hover:scale-110"
-                                >
-                                  <Star className={`w-6 h-6 ${s <= rating ? 'text-amber-400 fill-current' : 'text-slate-700'}`} />
-                                </button>
-                              ))}
-                            </div>
-                            <div className="flex gap-2">
-                              <input
-                                type="text"
-                                required
-                                minLength={5}
-                                className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-orange-600 focus:border-transparent outline-none transition-all"
-                                placeholder="Share your experience..."
-                                value={reviewComment}
-                                onChange={e => setReviewComment(e.target.value)}
-                              />
-                              <button
-                                type="submit"
-                                className="bg-orange-600 text-white px-4 py-2 rounded-xl hover:bg-orange-700 transition-all font-medium text-sm shadow-lg shadow-orange-600/20 active:scale-95"
-                              >
-                                Post
-                              </button>
-                            </div>
-                          </form>
-                        )}
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="p-6 sm:p-8 bg-slate-900 border-t border-slate-800 flex flex-col sm:flex-row gap-4 flex-shrink-0">
-              <button
-                onClick={() => setSelectedEventForDetails(null)}
-                className="order-2 sm:order-1 flex-1 px-6 py-3 rounded-xl bg-slate-800 text-slate-300 font-bold hover:bg-slate-700 transition-all border border-slate-700 font-outfit"
-              >
-                Close
-              </button>
-              {(!currentUser || currentUser.role === 'attendee') && (
-                (() => {
-                  if (!currentUser) {
-                    return (
-                      <button
-                        onClick={() => {
-                          setSelectedEventForDetails(null);
-                          setIsAuthModalOpen(true);
-                        }}
-                        className="order-1 sm:order-2 flex-[2] px-6 py-3 rounded-xl font-bold bg-orange-600 text-white hover:bg-orange-700 shadow-orange-500/20 active:scale-95 font-outfit"
-                      >
-                        Sign In to Register
-                      </button>
-                    );
-                  }
-                  const isRegistered = registrations.some(r => r.eventId === selectedEventForDetails.id && r.participantEmail === currentUser.email);
-                  const currentRegsCount = registrations.filter(r => r.eventId === selectedEventForDetails.id && r.status !== RegistrationStatus.REJECTED).length;
-                  const isFull = currentRegsCount >= (selectedEventForDetails.capacity as number);
-                  const now = new Date();
-                  const startDate = new Date(selectedEventForDetails.date);
-                  const endDate = selectedEventForDetails.endDate ? new Date(selectedEventForDetails.endDate) : new Date(startDate.getTime() + 3600000);
-
-                  const isLive = now >= startDate && now <= endDate;
-                  const isPast = now > endDate;
-                  const isClosed = selectedEventForDetails.isRegistrationOpen === false || now >= startDate;
+              {/* Modal Tabs */}
+              <div className="flex bg-slate-800/50 p-1 mx-6 sm:mx-8 rounded-xl border border-slate-800/50 mt-4">
+                <button
+                  onClick={() => setDetailsTab('info')}
+                  className={`flex-1 py-1.5 rounded-lg text-sm font-bold transition-all ${detailsTab === 'info' ? 'bg-slate-700 text-orange-400 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                >
+                  Information
+                </button>
+                {(() => {
+                  const isOrg = currentUser?.id === selectedEventForDetails.organizerId;
+                  const isCollab = selectedEventForDetails.collaboratorEmails?.includes(currentUser?.email || '');
+                  const isPart = registrations.some(r => r.eventId === selectedEventForDetails.id && r.participantId === currentUser?.id && r.status === RegistrationStatus.APPROVED);
+                  const canView = isOrg || isCollab || isPart;
 
                   return (
                     <button
-                      onClick={() => {
-                        if (isRegistered) {
-                          const myReg = registrations.find(r => r.eventId === selectedEventForDetails.id && r.participantEmail === currentUser.email);
-                          if (myReg) setSelectedRegistrationDetails(myReg);
-                        } else if (!isClosed) {
-                          setSelectedEventForReg(selectedEventForDetails);
-                          setSelectedEventForDetails(null);
-                        }
-                      }}
-                      disabled={!isRegistered && isClosed}
-                      className={`order-1 sm:order-2 flex-[2] px-6 py-3 rounded-xl font-bold transition-all shadow-lg font-outfit ${isRegistered
-                        ? 'bg-orange-900/40 text-orange-400 border border-orange-500 hover:bg-orange-900/60 active:scale-95'
-                        : isClosed
-                          ? 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed'
-                          : isFull
-                            ? 'bg-amber-600/20 text-amber-500 border border-amber-600/40 hover:bg-amber-600/30 active:scale-95'
-                            : 'bg-orange-600 text-white hover:bg-orange-700 shadow-orange-500/20 active:scale-95'
-                        }`}
+                      onClick={() => canView ? setDetailsTab('discussion') : addToast("Only registered participants can access the discussion.", "warning")}
+                      className={`flex-1 py-1.5 rounded-lg text-sm font-bold transition-all ${detailsTab === 'discussion' ? 'bg-slate-700 text-orange-400 shadow-sm' : 'text-slate-400 hover:text-slate-200'} ${!canView ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
-                      {isRegistered ? (
-                        <>
-                          <CheckCircle className="w-4 h-4 inline mr-2" /> View Registration
-                        </>
-                      ) : isClosed ? (
-                        <>
-                          <XCircle className="w-4 h-4 inline mr-2" /> {isPast ? 'Event Ended' : 'Registration Closed'}
-                        </>
-                      ) : isFull ? (
-                        <>
-                          <Clock className="w-4 h-4 inline mr-2" /> Join Waitlist
-                        </>
-                      ) : (
-                        <>
-                          <CalendarPlus className="w-4 h-4 inline mr-2" /> Register Now
-                        </>
-                      )}
+                      Discussion {!canView && <Lock className="w-3 h-3 inline mb-0.5 ml-1" />}
                     </button>
                   );
-                })()
-              )}
+                })()}
+                <button
+                  onClick={() => setDetailsTab('reviews')}
+                  className={`flex-1 py-1.5 rounded-lg text-sm font-bold transition-all ${detailsTab === 'reviews' ? 'bg-slate-700 text-orange-400 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                >
+                  Reviews
+                </button>
+              </div>
+
+              <div ref={scrollContainerRef} className="p-6 sm:p-8 overflow-y-auto custom-scrollbar flex-1">
+                {detailsTab === 'info' && (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-8 mb-8">
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-3 text-slate-300">
+                          <div className="p-2 bg-orange-500/10 rounded-lg">
+                            <Calendar className="w-5 h-5 text-orange-400" />
+                          </div>
+                          <div>
+                            <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">Date & Time</p>
+                            {selectedEventForDetails.endDate && new Date(selectedEventForDetails.date).toDateString() !== new Date(selectedEventForDetails.endDate).toDateString() ? (
+                              <div className="flex flex-col gap-0.5 mt-0.5">
+                                <p className="text-sm font-medium">
+                                  <span className="text-slate-400 text-[10px] uppercase tracking-wider mr-1.5 font-bold">Start:</span>
+                                  {format(new Date(selectedEventForDetails.date), 'MMM d, yyyy')} at {format(new Date(selectedEventForDetails.date), 'p')}
+                                </p>
+                                <p className="text-sm font-medium">
+                                  <span className="text-slate-400 text-[10px] uppercase tracking-wider mr-1.5 font-bold">End:</span>
+                                  {format(new Date(selectedEventForDetails.endDate), 'MMM d, yyyy')} at {format(new Date(selectedEventForDetails.endDate), 'p')}
+                                </p>
+                              </div>
+                            ) : (
+                              <>
+                                <p className="text-sm sm:text-base font-medium">
+                                  {format(new Date(selectedEventForDetails.date), 'EEEE, MMMM d, yyyy')}
+                                </p>
+                                <p className="text-xs sm:text-sm text-slate-400">
+                                  {format(new Date(selectedEventForDetails.date), 'p')}
+                                  {selectedEventForDetails.endDate && ` - ${format(new Date(selectedEventForDetails.endDate), 'p')}`}
+                                </p>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 text-slate-300">
+                          <div className="p-2 bg-orange-500/10 rounded-lg">
+                            <MapPin className="w-5 h-5 text-orange-400" />
+                          </div>
+                          <div>
+                            <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">Location</p>
+                            <div className="text-sm sm:text-base font-medium italic">
+                              {renderLocation(selectedEventForDetails.location, selectedEventForDetails.locationType)}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-3 text-slate-300">
+                          <div className="p-2 bg-orange-500/10 rounded-lg">
+                            <Users className="w-5 h-5 text-orange-400" />
+                          </div>
+                          <div>
+                            <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">Availability</p>
+                            <p className="text-sm sm:text-base font-medium">
+                              {(() => {
+                                const currentRegs = registrations.filter(r => r.eventId === selectedEventForDetails.id && r.status !== RegistrationStatus.REJECTED).length;
+                                const remaining = Math.max(0, Number(selectedEventForDetails.capacity) - currentRegs);
+                                const isDetailsClosed = selectedEventForDetails.isRegistrationOpen === false || new Date() >= new Date(selectedEventForDetails.date);
+                                if (isDetailsClosed) return 'Registration Closed';
+                                return remaining === 0 ? 'Sold Out' : `${remaining} Available Spots`;
+                              })()}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 text-slate-300">
+                          <div className="p-2 bg-orange-500/10 rounded-lg">
+                            <CheckCircle className="w-5 h-5 text-orange-400" />
+                          </div>
+                          <div>
+                            <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">Registration</p>
+                            <p className="text-sm sm:text-base font-medium">
+                              {(() => {
+                                const isOpen = selectedEventForDetails.isRegistrationOpen !== false && new Date(selectedEventForDetails.date) > new Date();
+                                return <span className={isOpen ? "text-emerald-400" : "text-rose-400"}>{isOpen ? "Open" : "Closed"}</span>;
+                              })()}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="border-t border-slate-800 pt-6">
+                      <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-3">About this experience</p>
+                      <div className="bg-slate-800/30 rounded-2xl p-4 sm:p-6 border border-slate-800">
+                        <p className="text-sm sm:text-base text-slate-300 leading-relaxed whitespace-pre-line italic border-l-4 border-orange-500/30 pl-4">
+                          {selectedEventForDetails.description}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="border-t border-slate-800 pt-6 mt-6">
+                      <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-3">Share Event</p>
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          onClick={() => {
+                            const url = `${window.location.origin}/?event=${selectedEventForDetails.id}`;
+                            navigator.clipboard.writeText(url);
+                            addToast('Link copied to clipboard!', 'success');
+                          }}
+                          className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-medium transition-colors border border-slate-700"
+                        >
+                          <Copy className="w-4 h-4" /> Copy Link
+                        </button>
+                        <a
+                          href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(`Check out ${selectedEventForDetails.title} on Eventron!`)}&url=${encodeURIComponent(`${window.location.origin}/?event=${selectedEventForDetails.id}`)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 px-4 py-2 bg-[#1DA1F2]/10 hover:bg-[#1DA1F2]/20 text-[#1DA1F2] rounded-lg text-sm font-medium transition-colors border border-[#1DA1F2]/20"
+                        >
+                          <Twitter className="w-4 h-4" /> Twitter
+                        </a>
+                        <a
+                          href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(`${window.location.origin}/?event=${selectedEventForDetails.id}`)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 px-4 py-2 bg-[#1877F2]/10 hover:bg-[#1877F2]/20 text-[#1877F2] rounded-lg text-sm font-medium transition-colors border border-[#1877F2]/20"
+                        >
+                          <Facebook className="w-4 h-4" /> Facebook
+                        </a>
+                        <a
+                          href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(`${window.location.origin}/?event=${selectedEventForDetails.id}`)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 px-4 py-2 bg-[#0A66C2]/10 hover:bg-[#0A66C2]/20 text-[#0A66C2] rounded-lg text-sm font-medium transition-colors border border-[#0A66C2]/20"
+                        >
+                          <Linkedin className="w-4 h-4" /> LinkedIn
+                        </a>
+                      </div>
+                    </div>
+
+                    <div className="border-t border-slate-800 pt-6 mt-6">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">Who's Going</p>
+                        <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full border border-slate-700">Approved</span>
+                      </div>
+                      {(() => {
+                        const approvedAttendees = registrations.filter(r => r.eventId === selectedEventForDetails.id && r.status === RegistrationStatus.APPROVED);
+
+                        if (approvedAttendees.length === 0) {
+                          return (
+                            <div className="bg-slate-800/30 rounded-2xl p-4 border border-slate-800 flex items-center gap-3">
+                              <div className="p-2 bg-slate-800 rounded-full text-slate-500">
+                                <Users className="w-4 h-4" />
+                              </div>
+                              <p className="text-sm text-slate-400 italic">No approved participants yet. Be the first!</p>
+                            </div>
+                          );
+                        }
+
+                        const visibleAttendees = showAllAttendees ? approvedAttendees : approvedAttendees.slice(0, 5);
+
+                        return (
+                          <div className="space-y-4">
+                            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                              {visibleAttendees.map((attendee) => (
+                                <ParticipantAvatar
+                                  key={attendee.id}
+                                  name={attendee.participantName}
+                                  avatarUrl={attendee.participantAvatarUrl}
+                                  userId={attendee.participantId}
+                                />
+                              ))}
+                            </div>
+                            {approvedAttendees.length > 5 && (
+                              <div className="text-center">
+                                <button
+                                  onClick={() => setShowAllAttendees(!showAllAttendees)}
+                                  className="text-xs font-bold text-orange-400 hover:text-orange-300 transition-colors bg-slate-800/50 hover:bg-slate-800 px-4 py-2 rounded-lg border border-slate-800 hover:border-slate-700 w-full active:scale-95"
+                                >
+                                  {showAllAttendees ? 'Show Less' : `+ ${approvedAttendees.length - 5} more attendees`}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    <div className="border-t border-slate-800 pt-6 mt-6">
+                      <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-3">Add to Calendar</p>
+                      <div className="flex flex-wrap gap-3">
+                        <a
+                          href={`https://www.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(selectedEventForDetails.title)}&dates=${format(new Date(selectedEventForDetails.date), "yyyyMMdd'T'HHmmss").replace(/-|:/g, '')}/${format(new Date(selectedEventForDetails.endDate), "yyyyMMdd'T'HHmmss").replace(/-|:/g, '')}&details=${encodeURIComponent(selectedEventForDetails.description)}&location=${encodeURIComponent(selectedEventForDetails.location)}&sf=true&output=xml`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 px-4 py-2 bg-orange-600/10 hover:bg-orange-600/20 text-orange-400 rounded-lg text-sm font-medium transition-colors border border-orange-600/20"
+                        >
+                          <CalendarPlus className="w-4 h-4" /> Google Calendar
+                        </a>
+                        <button
+                          onClick={() => {
+                            const event = selectedEventForDetails;
+                            const icsContent = [
+                              'BEGIN:VCALENDAR',
+                              'VERSION:2.0',
+                              'BEGIN:VEVENT',
+                              `SUMMARY:${event.title}`,
+                              `DESCRIPTION:${event.description.replace(/\n/g, '\\n')}`,
+                              `DTSTART:${format(new Date(event.date), "yyyyMMdd'T'HHmmss").replace(/-|:/g, '')}`,
+                              `DTEND:${format(new Date(event.endDate), "yyyyMMdd'T'HHmmss").replace(/-|:/g, '')}`,
+                              `LOCATION:${event.location}`,
+                              'END:VEVENT',
+                              'END:VCALENDAR'
+                            ].join('\n');
+
+                            const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+                            const link = document.createElement('a');
+                            link.href = window.URL.createObjectURL(blob);
+                            link.setAttribute('download', `${event.title.replace(/\s+/g, '_')}.ics`);
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                          }}
+                          className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-medium transition-colors border border-slate-700"
+                        >
+                          <Download className="w-4 h-4" /> Download .ICS
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {detailsTab === 'discussion' && (
+                  (() => {
+                    const isOrg = currentUser?.id === selectedEventForDetails.organizerId;
+                    const isCollab = selectedEventForDetails.collaboratorEmails?.includes(currentUser?.email || '');
+                    const isPart = registrations.some(r => r.eventId === selectedEventForDetails.id && r.participantId === currentUser?.id && r.status === RegistrationStatus.APPROVED);
+                    const canView = isOrg || isCollab || isPart;
+
+                    if (!canView) {
+                      return (
+                        <div className="h-full flex flex-col items-center justify-center text-center p-8 min-h-[400px]">
+                          <div className="p-4 bg-slate-800 rounded-full mb-4">
+                            <Lock className="w-8 h-8 text-slate-500" />
+                          </div>
+                          <h3 className="text-xl font-bold text-white mb-2">Participants Only</h3>
+                          <p className="text-slate-400 max-w-xs text-sm">
+                            Join this event and get approved to access the discussion board and chat with other attendees.
+                          </p>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="h-full flex flex-col min-h-[400px]">
+                        <div className="flex-1 space-y-4 mb-4 overflow-y-auto pr-2 custom-scrollbar">
+                          {isMessagesLoading ? (
+                            <div className="py-20 text-center">
+                              <Loader2 className="w-8 h-8 animate-spin text-slate-700 mx-auto" />
+                              <p className="text-slate-500 text-sm mt-3 font-medium">Loading conversations...</p>
+                            </div>
+                          ) : messages.length > 0 ? (
+                            messages.map(msg => (
+                              <div key={msg.id} className={`flex flex-col ${msg.userId === currentUser.id ? 'items-end' : 'items-start'}`}>
+                                <div className="flex items-baseline gap-2 mb-1 px-1">
+                                  <span className="text-xs font-bold text-slate-300">{msg.userName}</span>
+                                  <span className="text-[10px] text-slate-500">{format(new Date(msg.createdAt), 'h:mm a')}</span>
+                                </div>
+                                <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm shadow-sm ${msg.userId === currentUser.id
+                                  ? 'bg-orange-600 text-white rounded-tr-none'
+                                  : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700'
+                                  }`}>
+                                  {msg.content}
+                                </div>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="py-20 text-center">
+                              <MessageSquare className="w-12 h-12 text-slate-800 mx-auto mb-4" />
+                              <p className="text-slate-400 text-sm font-medium">No messages yet.</p>
+                              <p className="text-slate-500 text-xs mt-1">Be the first to start the discussion!</p>
+                            </div>
+                          )}
+                        </div>
+
+                        <form onSubmit={handleSendMessage} className="mt-auto pt-4 border-t border-slate-800 flex gap-2">
+                          <input
+                            type="text"
+                            className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-orange-600 focus:border-transparent outline-none transition-all shadow-inner"
+                            placeholder="Ask a question or say hi..."
+                            value={newMessageText}
+                            onChange={e => setNewMessageText(e.target.value)}
+                          />
+                          <button
+                            type="submit"
+                            disabled={!newMessageText.trim()}
+                            className="bg-orange-600 text-white p-3 rounded-xl hover:bg-orange-700 disabled:opacity-50 disabled:grayscale transition-all shadow-lg shadow-orange-600/20 active:scale-95 flex items-center justify-center group"
+                          >
+                            <Send className="w-5 h-5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                          </button>
+                        </form>
+                      </div>
+                    );
+                  })()
+                )}
+
+                {detailsTab === 'reviews' && (
+                  <div className="h-full flex flex-col min-h-[400px]">
+                    {isReviewsLoading ? (
+                      <div className="py-20 text-center">
+                        <Loader2 className="w-8 h-8 animate-spin text-slate-700 mx-auto" />
+                        <p className="text-slate-500 text-sm mt-3 font-medium">Loading reviews...</p>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Average Rating Section */}
+                        {reviews.length > 0 && (
+                          <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700 mb-6 flex items-center justify-between">
+                            <div>
+                              <div className="text-3xl font-bold text-white flex items-center gap-2">
+                                {(reviews.reduce((acc, curr) => acc + curr.rating, 0) / reviews.length).toFixed(1)}
+                                <Star className="w-6 h-6 text-amber-400 fill-amber-400" />
+                              </div>
+                              <p className="text-sm text-slate-400 mt-1">
+                                Average Rating based on {reviews.length} review{reviews.length !== 1 ? 's' : ''}
+                              </p>
+                            </div>
+                            <div className="flex flex-col gap-1 text-xs text-slate-500">
+                              {[5, 4, 3, 2, 1].map(r => {
+                                const count = reviews.filter(rev => rev.rating === r).length;
+                                const percentage = (count / reviews.length) * 100;
+                                return (
+                                  <div key={r} className="flex items-center gap-2">
+                                    <span className="w-3">{r}</span>
+                                    <Star className="w-3 h-3 text-slate-600" />
+                                    <div className="w-24 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                      <div className="h-full bg-amber-500" style={{ width: `${percentage}%` }} />
+                                    </div>
+                                    <span className="w-6 text-right">{count}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex-1 space-y-6 mb-6 overflow-y-auto pr-2 custom-scrollbar">
+                          {reviews.length > 0 ? (
+                            reviews.map(review => (
+                              <div key={review.id} className="bg-slate-800/50 p-4 rounded-xl border border-slate-800">
+                                <div className="flex justify-between items-start mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white">
+                                      {review.userName.charAt(0)}
+                                    </div>
+                                    <div>
+                                      <p className="text-sm font-bold text-slate-200">{review.userName}</p>
+                                      <p className="text-[10px] text-slate-500">{format(new Date(review.createdAt), 'MMM d, yyyy')}</p>
+                                    </div>
+                                  </div>
+                                  <div className="flex text-amber-400">
+                                    {[1, 2, 3, 4, 5].map(star => (
+                                      <Star key={star} className={`w-3 h-3 ${star <= review.rating ? 'fill-current' : 'text-slate-700'}`} />
+                                    ))}
+                                  </div>
+                                </div>
+                                <p className="text-sm text-slate-300 italic">"{review.comment}"</p>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="py-16 text-center">
+                              <Star className="w-12 h-12 text-slate-800 mx-auto mb-4" />
+                              <p className="text-slate-400 text-sm font-medium">No reviews yet.</p>
+                              <p className="text-slate-500 text-xs mt-1">Attendees can leave reviews after the event.</p>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Review Form - Only for Attendees who have attended */}
+                        {currentUser.role === 'attendee' &&
+                          registrations.some(r =>
+                            r.eventId === selectedEventForDetails.id &&
+                            r.participantEmail === currentUser.email &&
+                            r.status === RegistrationStatus.APPROVED &&
+                            (r.attended || new Date(selectedEventForDetails.date) < new Date())
+                          ) &&
+                          !reviews.some(r => r.userId === currentUser.id) && (
+                            <form onSubmit={handleSubmitReview} className="mt-auto pt-6 border-t border-slate-800">
+                              <h4 className="text-sm font-bold text-white mb-3">Leave a Review</h4>
+                              <div className="flex gap-2 mb-3">
+                                {[1, 2, 3, 4, 5].map(s => (
+                                  <button
+                                    key={s}
+                                    type="button"
+                                    onClick={() => setRating(s)}
+                                    className="focus:outline-none transition-transform hover:scale-110"
+                                  >
+                                    <Star className={`w-6 h-6 ${s <= rating ? 'text-amber-400 fill-current' : 'text-slate-700'}`} />
+                                  </button>
+                                ))}
+                              </div>
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  required
+                                  minLength={5}
+                                  className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-orange-600 focus:border-transparent outline-none transition-all"
+                                  placeholder="Share your experience..."
+                                  value={reviewComment}
+                                  onChange={e => setReviewComment(e.target.value)}
+                                />
+                                <button
+                                  type="submit"
+                                  className="bg-orange-600 text-white px-4 py-2 rounded-xl hover:bg-orange-700 transition-all font-medium text-sm shadow-lg shadow-orange-600/20 active:scale-95"
+                                >
+                                  Post
+                                </button>
+                              </div>
+                            </form>
+                          )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="p-6 sm:p-8 bg-slate-900 border-t border-slate-800 flex flex-col sm:flex-row gap-4 flex-shrink-0">
+                <button
+                  onClick={() => setSelectedEventForDetails(null)}
+                  className="order-2 sm:order-1 flex-1 px-6 py-3 rounded-xl bg-slate-800 text-slate-300 font-bold hover:bg-slate-700 transition-all border border-slate-700 font-outfit"
+                >
+                  Close
+                </button>
+                {(!currentUser || currentUser.role === 'attendee') && (
+                  (() => {
+                    if (!currentUser) {
+                      return (
+                        <button
+                          onClick={() => {
+                            setSelectedEventForDetails(null);
+                            setIsAuthModalOpen(true);
+                          }}
+                          className="order-1 sm:order-2 flex-[2] px-6 py-3 rounded-xl font-bold bg-orange-600 text-white hover:bg-orange-700 shadow-orange-500/20 active:scale-95 font-outfit"
+                        >
+                          Sign In to Register
+                        </button>
+                      );
+                    }
+                    const isRegistered = registrations.some(r => r.eventId === selectedEventForDetails.id && r.participantEmail === currentUser.email);
+                    const currentRegsCount = registrations.filter(r => r.eventId === selectedEventForDetails.id && r.status !== RegistrationStatus.REJECTED).length;
+                    const isFull = currentRegsCount >= Number(selectedEventForDetails.capacity || 0);
+                    const now = new Date();
+                    const startDate = new Date(selectedEventForDetails.date);
+                    const endDate = selectedEventForDetails.endDate ? new Date(selectedEventForDetails.endDate) : new Date(startDate.getTime() + 3600000);
+
+                    const isLive = now >= startDate && now <= endDate;
+                    const isPast = now > endDate;
+                    const isClosed = selectedEventForDetails.isRegistrationOpen === false || now >= startDate;
+
+                    return (
+                      <button
+                        onClick={() => {
+                          if (isRegistered) {
+                            const myReg = registrations.find(r => r.eventId === selectedEventForDetails.id && r.participantEmail === currentUser.email);
+                            if (myReg) setSelectedRegistrationDetails(myReg);
+                          } else if (!isClosed) {
+                            setSelectedEventForReg(selectedEventForDetails);
+                            setSelectedEventForDetails(null);
+                          }
+                        }}
+                        disabled={!isRegistered && isClosed}
+                        className={`order-1 sm:order-2 flex-[2] px-6 py-3 rounded-xl font-bold transition-all shadow-lg font-outfit ${isRegistered
+                          ? 'bg-orange-900/40 text-orange-400 border border-orange-500 hover:bg-orange-900/60 active:scale-95'
+                          : isClosed
+                            ? 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed'
+                            : isFull
+                              ? 'bg-amber-600/20 text-amber-500 border border-amber-600/40 hover:bg-amber-600/30 active:scale-95'
+                              : 'bg-orange-600 text-white hover:bg-orange-700 shadow-orange-500/20 active:scale-95'
+                          }`}
+                      >
+                        {isRegistered ? (
+                          <>
+                            <CheckCircle className="w-4 h-4 inline mr-2" /> View Registration
+                          </>
+                        ) : isClosed ? (
+                          <>
+                            <XCircle className="w-4 h-4 inline mr-2" /> {isPast ? 'Event Ended' : 'Registration Closed'}
+                          </>
+                        ) : isFull ? (
+                          <>
+                            <Clock className="w-4 h-4 inline mr-2" /> Join Waitlist
+                          </>
+                        ) : (
+                          <>
+                            <CalendarPlus className="w-4 h-4 inline mr-2" /> Register Now
+                          </>
+                        )}
+                      </button>
+                    );
+                  })()
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
 
       <Suspense fallback={null}>

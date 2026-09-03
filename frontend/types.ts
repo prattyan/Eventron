@@ -1,4 +1,4 @@
-export type Role = 'organizer' | 'attendee';
+export type Role = 'organizer' | 'attendee' | 'admin';
 
 export interface User {
   id: string;
@@ -26,6 +26,14 @@ export interface PromoCode {
   code: string;
   type: 'percentage' | 'fixed';
   value: number;
+  usageLimit?: number;
+  usedCount?: number;
+}
+
+export enum EventStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED'
 }
 
 export interface Event {
@@ -44,9 +52,20 @@ export interface Event {
   collaboratorEmails?: string[];
   participationMode?: ParticipationMode;
   maxTeamSize?: number;
+  minTeamSize?: number;
   isPaid?: boolean;
   price?: number;
   promoCodes?: PromoCode[];
+  organizerPaymentDetails?: {
+    upiId?: string;
+    bankDetails?: {
+      accountNumber: string;
+      ifsc: string;
+      accountName: string;
+    };
+  };
+  settlementStatus?: 'NOT_PROCESSED' | 'PROCESSING' | 'PROCESSED';
+  status?: EventStatus;
 }
 
 export enum RegistrationStatus {
@@ -55,6 +74,7 @@ export enum RegistrationStatus {
   REJECTED = 'REJECTED',
   WAITLISTED = 'WAITLISTED',
   AWAITING_PAYMENT = 'AWAITING_PAYMENT',
+  TEAM_AWAITING_SUBMISSION = 'TEAM_AWAITING_SUBMISSION',
 }
 
 export enum PaymentStatus {
@@ -71,6 +91,7 @@ export interface PaymentDetails {
   orderId?: string;
   promocodeApplied?: string;
   discountAmount?: number;
+  platformFee?: number;
 }
 
 export interface Registration {
@@ -106,7 +127,7 @@ export interface Team {
   createdAt: string;
 }
 
-export type Tab = 'browse' | 'my-tickets' | 'organizer';
+export type Tab = 'browse' | 'my-tickets' | 'organizer' | 'admin';
 
 export interface Toast {
   id: string;

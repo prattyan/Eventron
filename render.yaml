@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: eventron
+    runtime: python
+    plan: free
+    buildCommand: "npm install --prefix frontend && npm run build --prefix frontend && pip install -r backend/requirements.txt"
+    startCommand: "uvicorn backend.main:combined_app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: NODE_VERSION
+        value: 20.10.0
+      - key: MONGO_URI
+        sync: false
+      - key: DB_NAME
+        value: eventhorizon
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_VERIFY_SERVICE_SID
+        sync: false
+      - key: TWILIO_CUSTOM_APP_NAME
+        value: Eventron
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false

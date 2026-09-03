@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import { format, parseISO, startOfDay, subDays, eachDayOfInterval } from 'date-fns';
 import { Event, Registration, RegistrationStatus } from '../types';
-import { Users, TrendingUp, CalendarCheck, Activity } from 'lucide-react';
+import { Users, TrendingUp, CalendarCheck, Activity, IndianRupee } from 'lucide-react';
 
 interface AnalyticsDashboardProps {
     events: Event[];
@@ -16,7 +16,6 @@ const COLORS = ['#d97757', '#10b981', '#ef4444', '#f59e0b']; // Indigo, Green, R
 
 export default function AnalyticsDashboard({ events, registrations }: AnalyticsDashboardProps) {
 
-    // --- KPI Cards ---
     const totalRegistrations = registrations.length;
     const totalEvents = events.length;
     const totalApprovals = registrations.filter(r => r.status === RegistrationStatus.APPROVED).length;
@@ -25,20 +24,22 @@ export default function AnalyticsDashboard({ events, registrations }: AnalyticsD
         return totalApprovals > 0 ? Math.round((attended / totalApprovals) * 100) : 0;
     }, [registrations, totalApprovals]);
 
+    const totalRevenue = useMemo(() => {
+        return registrations.reduce((acc, reg) => acc + (reg.paymentDetails?.amount || 0), 0);
+    }, [registrations]);
 
-    // --- Chart 1: Registrations Over Time (Last 14 Days) ---
+
+
     const timeSeriesData = useMemo(() => {
         const end = startOfDay(new Date());
-        const start = subDays(end, 13); // Last 14 days including today
+        const start = subDays(end, 13);
         const days = eachDayOfInterval({ start, end });
 
-        // Initialize counts
         const counts: Record<string, number> = {};
         days.forEach(day => {
             counts[format(day, 'yyyy-MM-dd')] = 0;
         });
 
-        // Populate counts
         registrations.forEach(reg => {
             const dateKey = format(parseISO(reg.registeredAt), 'yyyy-MM-dd');
             if (counts.hasOwnProperty(dateKey)) {
@@ -53,7 +54,7 @@ export default function AnalyticsDashboard({ events, registrations }: AnalyticsD
     }, [registrations]);
 
 
-    // --- Chart 2: Status Distribution ---
+
     const statusData = useMemo(() => {
         const counts = {
             [RegistrationStatus.PENDING]: 0,
@@ -75,7 +76,7 @@ export default function AnalyticsDashboard({ events, registrations }: AnalyticsD
     }, [registrations]);
 
 
-    // --- Chart 3: Top 5 Events by Popularity ---
+
     const popularityData = useMemo(() => {
         const eventCounts: Record<string, number> = {};
         registrations.forEach(r => {
@@ -94,11 +95,33 @@ export default function AnalyticsDashboard({ events, registrations }: AnalyticsD
             .slice(0, 5);
     }, [events, registrations]);
 
+
+    const revenueData = useMemo(() => {
+        const eventRevenue: Record<string, number> = {};
+        registrations.forEach(r => {
+            const amount = r.paymentDetails?.amount || 0;
+            if (amount > 0) {
+                eventRevenue[r.eventId] = (eventRevenue[r.eventId] || 0) + amount;
+            }
+        });
+
+        return Object.entries(eventRevenue)
+            .map(([eventId, amount]) => {
+                const event = events.find(e => e.id === eventId);
+                return {
+                    name: event ? (event.title.length > 15 ? event.title.substring(0, 15) + '...' : event.title) : 'Unknown',
+                    revenue: amount
+                };
+            })
+            .sort((a, b) => b.revenue - a.revenue)
+            .slice(0, 5);
+    }, [events, registrations]);
+
     return (
         <div className="space-y-6 animate-in fade-in duration-500">
 
             {/* KPI Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center gap-4">
                     <div className="p-3 bg-orange-500/10 rounded-lg text-orange-400">
                         <Users className="w-6 h-6" />
@@ -138,6 +161,16 @@ export default function AnalyticsDashboard({ events, registrations }: AnalyticsD
                     <div>
                         <p className="text-slate-400 text-xs uppercase font-semibold">Avg. Attendance</p>
                         <p className="text-2xl font-bold text-white font-outfit">{averageAttendance}%</p>
+                    </div>
+                </div>
+
+                <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center gap-4">
+                    <div className="p-3 bg-indigo-500/10 rounded-lg text-indigo-400">
+                        <IndianRupee className="w-6 h-6" />
+                    </div>
+                    <div>
+                        <p className="text-slate-400 text-xs uppercase font-semibold">Total Revenue</p>
+                        <p className="text-2xl font-bold text-white font-outfit">₹{totalRevenue.toLocaleString()}</p>
                     </div>
                 </div>
             </div>
@@ -203,7 +236,7 @@ export default function AnalyticsDashboard({ events, registrations }: AnalyticsD
                 </div>
 
                 {/* Popular Events */}
-                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl lg:col-span-2">
+                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl">
                     <h3 className="text-lg font-bold text-white mb-6 font-outfit">Top Events by Registrations</h3>
                     <div className="h-64 w-full">
                         {popularityData.length > 0 ? (
@@ -221,6 +254,30 @@ export default function AnalyticsDashboard({ events, registrations }: AnalyticsD
                             </ResponsiveContainer>
                         ) : (
                             <p className="text-slate-500 text-center pt-20">No event data available</p>
+                        )}
+                    </div>
+                </div>
+
+                {/* Revenue by Event */}
+                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl">
+                    <h3 className="text-lg font-bold text-white mb-6 font-outfit">Top Events by Revenue</h3>
+                    <div className="h-64 w-full">
+                        {revenueData.length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={revenueData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
+                                    <XAxis type="number" stroke="#64748b" fontSize={12} tickLine={false} axisLine={false} allowDecimals={false} unit="₹" />
+                                    <YAxis dataKey="name" type="category" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} width={100} />
+                                    <Tooltip
+                                        cursor={{ fill: '#1e293b', opacity: 0.4 }}
+                                        contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px', color: '#f1f5f9' }}
+                                        formatter={(value: number) => [`₹${value}`, 'Revenue']}
+                                    />
+                                    <Bar dataKey="revenue" fill="#f59e0b" radius={[0, 4, 4, 0]} barSize={20} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <p className="text-slate-500 text-center pt-20">No revenue data available</p>
                         )}
                     </div>
                 </div>
