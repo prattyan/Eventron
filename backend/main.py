@@ -258,7 +258,8 @@ async def get_recommendations(request: Request):
         # We'll use title + description for embedding
         past_vectors = []
         for event in past_events:
-            text = f"{event.get('title', '')} {event.get('description', '')}"
+            tags_str = " ".join(event.get('tags', [])) if isinstance(event.get('tags'), list) else ""
+            text = f"{event.get('title', '')} {event.get('description', '')} {tags_str}"
             vector = await get_embedding(text)
             if vector:
                 past_vectors.append(vector)
@@ -282,7 +283,8 @@ async def get_recommendations(request: Request):
         # 4. Calculate similarities
         recommendations = []
         for event in upcoming_events:
-            text = f"{event.get('title', '')} {event.get('description', '')}"
+            tags_str = " ".join(event.get('tags', [])) if isinstance(event.get('tags'), list) else ""
+            text = f"{event.get('title', '')} {event.get('description', '')} {tags_str}"
             event_vector = await get_embedding(text)
             if event_vector:
                 score = cosine_similarity(reference_vector, event_vector)
@@ -687,13 +689,21 @@ async def data_action(action: str, request: Request):
                     user_team_ids = {t.get("id") for t in matched_teams if t.get("id")}
             user_context["userTeamIds"] = user_team_ids
 
-            # Fetch all events to determine permissions (in thread)
+            # Fetch only the user's managed events to build permissions (lightning fast)
             all_events: list[dict] = []
-            events_requested = any(r.get("collection") == "events" for r in requests)
-            if events_requested:
-                all_events = await asyncio.to_thread(
-                    lambda: _serialise(list(db["events"].find({})))
-                )
+            if u_id or u_email:
+                conds_ev = []
+                if u_id:
+                    conds_ev.append({"organizerId": u_id})
+                if u_email:
+                    conds_ev.append({"collaboratorEmails": u_email})
+                if conds_ev:
+                    all_events = await asyncio.to_thread(
+                        lambda: _serialise(list(db["events"].find(
+                            {"$or": conds_ev},
+                            {"id": 1, "organizerId": 1, "collaboratorEmails": 1}
+                        )))
+                    )
 
             # Run all sub-queries concurrently using asyncio.gather
             async def _run_sub_query(req_item: dict) -> dict:
@@ -1167,6 +1177,19 @@ async def send_email_delete_otp(request: Request):
         print(f"🔑 [EMAIL DELETION OTP] OTP for {email} delivered: {email_delivered} (SMTP: {sent_smtp}, Comms: {sent_twilio_comms}, Verify: {sent_twilio_verify})")
 
         if not email_delivered:
+            # Fallback for dev mode where SMTP isn't configured
+            if not os.environ.get("SMTP_HOST"):
+                print(f"DEV MODE: Pretending delete OTP email was sent. OTP is {otp_code}")
+                return Response(
+                    content=json.dumps({
+                        "success": True, 
+                        "message": "Verification code sent (DEV MODE). Check server logs.", 
+                        "dev_otp": otp_code
+                    }),
+                    status_code=200,
+                    media_type="application/json",
+                )
+
             return Response(
                 content=json.dumps({
                     "success": False,

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, Suspense, lazy, useRef } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import QRCode from 'react-qr-code';
 import { Users, Sparkles, MapPin, ExternalLink, QrCode, ChevronRight, ChevronDown, Edit, Calendar, Clock, Plus, ScanLine, Filter, Download, Mail, Send, CheckCircle, XCircle, Menu, X, Ticket, Info, Trash2, Camera, RefreshCw, Smartphone, Shield, LogOut, Settings as Setting2, Layout, Bell, UserCircle, Search, MoreHorizontal, Check, AlertCircle, AlertTriangle, CheckSquare, MessageSquare, KeyRound, Share2, Facebook, Twitter, Linkedin, Copy, Star, CalendarPlus, Loader2, Image as ImageIcon, ChevronLeft, Link, Save, Upload, Tag, Lock } from 'lucide-react';
@@ -31,6 +31,9 @@ const LiquidChrome = lazy(() => import('./components/LiquidChrome'));
 const ParticleBackground = lazy(() => import('./components/ParticleBackground'));
 const EventChatBot = lazy(() => import('./components/EventChatBot'));
 const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
+const TermsPage = lazy(() => import('./components/TermsPage'));
+const PrivacyPage = lazy(() => import('./components/PrivacyPage'));
+const RefundPage = lazy(() => import('./components/RefundPage'));
 
 // --- Sub-Components ---
 
@@ -211,7 +214,7 @@ const LazyEventImage = ({ eventId, initialSrc, alt, className }: { eventId: stri
     );
   }
 
-  return <img src={src} alt={alt} className={className} />;
+  return <img src={src} alt={alt} className={className} onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80'; }} />;
 };
 
 const getCroppedImg = (imageSrc: string, pixelCrop: any): Promise<string> => {
@@ -283,6 +286,9 @@ const loadRazorpay = () => {
     document.body.appendChild(script);
   });
 };
+
+// --- Legal Pages ---
+
 
 // --- Main App Component ---
 
@@ -361,6 +367,9 @@ export default function App() {
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [otpPurpose, setOtpPurpose] = useState<'login' | 'profile'>('login');
+  const [showAllPastEvents, setShowAllPastEvents] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
 
   // Account Deletion Email Verification State
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -1216,6 +1225,7 @@ export default function App() {
       imageUrl: fullEvent.imageUrl || '', // Likely empty string here if excluded
       customQuestions: fullEvent.customQuestions || [],
       collaboratorEmails: fullEvent.collaboratorEmails || [],
+      tags: fullEvent.tags || [],
       participationMode: fullEvent.participationMode || 'individual',
       maxTeamSize: fullEvent.maxTeamSize?.toString() || '5',
       minTeamSize: fullEvent.minTeamSize?.toString() || '2',
@@ -1245,6 +1255,12 @@ export default function App() {
     if (!newEvent.title || !newEvent.date || !currentUser || !newEvent.capacity) return;
 
     try {
+      const tagsForImage = (newEvent.tags && newEvent.tags.length > 0)
+        ? newEvent.tags.join(',') 
+        : 'technology,abstract';
+      
+      const generatedImageUrl = `https://loremflickr.com/800/400/${encodeURIComponent(tagsForImage)}?random=${Math.floor(Math.random() * 1000)}`;
+
       const evtDataCommon = {
         title: newEvent.title,
         date: newEvent.date,
@@ -1253,9 +1269,10 @@ export default function App() {
         locationType: newEvent.locationType,
         description: newEvent.description,
         capacity: parseInt(newEvent.capacity) || 0,
-        imageUrl: newEvent.imageUrl || `https://picsum.photos/800/400?random=${Math.floor(Math.random() * 100)}`,
+        imageUrl: newEvent.imageUrl || generatedImageUrl,
         customQuestions: newEvent.customQuestions || [],
         collaboratorEmails: newEvent.collaboratorEmails || [],
+        tags: newEvent.tags || [],
         organizerId: currentUser.id,
         isRegistrationOpen: true,
         participationMode: newEvent.participationMode,
@@ -2580,7 +2597,7 @@ export default function App() {
 
               <div className="mt-8 border-t border-zinc-900 pt-6">
                 <p className="text-[10px] text-zinc-600 text-center leading-relaxed">
-                  By signing in, you agree to our <span className="text-zinc-500 underline cursor-pointer">Terms of Service</span> and acknowledge our <span className="text-zinc-500 underline cursor-pointer">Privacy Policy</span>.
+                  By signing in, you agree to our <span onClick={() => { setIsAuthModalOpen(false); navigate('/terms'); window.scrollTo(0,0); }} className="text-zinc-500 hover:text-orange-400 transition-colors underline cursor-pointer">Terms of Service</span> and acknowledge our <span onClick={() => { setIsAuthModalOpen(false); navigate('/privacy'); window.scrollTo(0,0); }} className="text-zinc-500 hover:text-orange-400 transition-colors underline cursor-pointer">Privacy Policy</span>.
                 </p>
               </div>
             </div>
@@ -2847,18 +2864,38 @@ export default function App() {
 
   const renderEvents = () => {
     const visibleEvents = events.filter(e => {
-      if (currentUser?.role === 'admin') return true;
-      if (e.status === EventStatus.APPROVED) return true;
-      if (currentUser && e.organizerId === currentUser.id) return true;
-      if (!e.status) return true; // Fallback for legacy events
-      return false;
+      let isVisible = false;
+      if (currentUser?.role === 'admin') isVisible = true;
+      else if (e.status === EventStatus.APPROVED) isVisible = true;
+      else if (currentUser && e.organizerId === currentUser.id) isVisible = true;
+      else if (!e.status) isVisible = true; // Fallback for legacy events
+
+      if (!isVisible) return false;
+
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        if (!e.title.toLowerCase().includes(query) && !e.description.toLowerCase().includes(query)) {
+          return false;
+        }
+      }
+
+      if (selectedTag && (!e.tags || !e.tags.includes(selectedTag))) {
+        return false;
+      }
+
+      return true;
     });
 
     const now = new Date();
     const upcomingEvents = visibleEvents
       .filter(e => !isPastEvent(e))
-      .filter(e => !recommendedEvents.some(rec => rec.id === e.id))
-      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      .sort((a, b) => {
+        const aIsRec = recommendedEvents.some(rec => rec.id === a.id);
+        const bIsRec = recommendedEvents.some(rec => rec.id === b.id);
+        if (aIsRec && !bIsRec) return -1;
+        if (!aIsRec && bIsRec) return 1;
+        return new Date(a.date).getTime() - new Date(b.date).getTime();
+      });
     const pastEvents = visibleEvents.filter(e => isPastEvent(e)).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     const renderEventCard = (event: AppEvent, index: number) => {
@@ -2882,8 +2919,13 @@ export default function App() {
               {event.locationType === 'online' ? 'Online' : 'Offline'}
             </div>
 
-            <div className={`absolute top-4 left-4 backdrop-blur-md px-4 py-1.5 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl z-10 ${event.isPaid ? 'bg-orange-600/90 text-white border border-orange-400/30' : 'bg-green-600/90 text-white border border-green-400/30'}`}>
-              {event.isPaid ? `₹${event.price}` : 'Free'}
+            <div className="absolute top-4 left-4 z-10 flex gap-2">
+              {recommendedEvents.some(rec => rec.id === event.id) && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl bg-gradient-to-r from-orange-600 to-amber-500 text-[10px] font-black text-white uppercase tracking-wider shadow-xl shadow-orange-600/30">
+                  <Sparkles className="w-3 h-3" />
+                  AI Pick
+                </div>
+              )}
             </div>
 
             <div className="absolute bottom-4 left-4 z-10 flex gap-2">
@@ -3077,11 +3119,35 @@ export default function App() {
               </h2>
             </div>
 
+            <div className="flex flex-col sm:flex-row gap-4 w-full md:w-auto">
+              <div className="relative">
+                <Search className="w-5 h-5 text-slate-500 absolute left-4 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Search events..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full sm:w-64 bg-slate-900/80 border border-slate-700/50 text-white placeholder-slate-500 px-12 py-3 rounded-2xl focus:outline-none focus:ring-2 focus:ring-orange-500/50 focus:border-orange-500 transition-all"
+                />
+              </div>
+            </div>
+          </div>
 
+          {/* Tags Filter */}
+          <div className="flex flex-wrap gap-2 mb-10">
+            {['AI', 'ML', 'Conference', 'Tech', 'Hackathon', 'Networking', 'Startup', 'Workshop', 'Design'].map((tag) => (
+              <button
+                key={tag}
+                onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${selectedTag === tag ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/20' : 'bg-slate-900/50 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'}`}
+              >
+                {tag}
+              </button>
+            ))}
           </div>
 
           {!dataLoading && upcomingEvents.length === 0 ? (
-            <div className="text-center py-32 glass-card rounded-[40px] border-dashed border-2 border-white/5">
+            <div className="text-center py-16 sm:py-32 glass-card rounded-[40px] border-dashed border-2 border-white/5">
               <div className="w-24 h-24 bg-orange-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
                 <Calendar className="w-12 h-12 text-orange-500 opacity-50" />
               </div>
@@ -3097,7 +3163,7 @@ export default function App() {
               )}
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
               {dataLoading ? (
                 Array(6).fill(0).map((_, i) => <EventCardSkeleton key={i} />)
               ) : (
@@ -3105,169 +3171,7 @@ export default function App() {
               )}
             </div>
           )}
-          {/* AI-Powered Recommendations Section */}
-          {currentUser && currentUser.role === 'attendee' && !isAiUnavailable && (recommendedEvents.length > 0 || areRecommendationsLoading) && (
-            <div className="mt-32">
-              {/* Section Header */}
-              <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8 md:mb-12">
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse shadow-[0_0_8px_rgba(251,146,60,0.8)]"></div>
-                    <span className="text-[10px] font-black text-orange-400 uppercase tracking-[0.4em]">AI Curated</span>
-                    <span className="text-[10px] font-medium text-slate-500 ml-2">Powered by Gemini</span>
-                  </div>
-                  <h2 className="text-3xl sm:text-4xl font-black font-outfit text-white tracking-tight">
-                    Recommended <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-amber-400">For You</span>
-                  </h2>
-                  <p className="text-slate-400 text-sm mt-2 max-w-md">Based on your past registrations, we think you'll love these events</p>
-                </div>
-              </div>
 
-              {/* Loading State */}
-              {areRecommendationsLoading ? (
-                <div className="flex flex-col items-center justify-center py-20 gap-6">
-                  <div className="relative">
-                    <div className="w-16 h-16 rounded-full border-2 border-slate-800" />
-                    <div className="absolute inset-0 w-16 h-16 rounded-full border-2 border-transparent border-t-orange-500 animate-spin" />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <Sparkles className="w-6 h-6 text-orange-400 animate-pulse" />
-                    </div>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-lg font-bold text-white font-outfit mb-1">Analyzing Your Preferences</p>
-                    <p className="text-sm text-slate-500">Our AI is finding the perfect events for you...</p>
-                  </div>
-                </div>
-              ) : (
-                /* Cards Grid - Same style as Upcoming Experiences */
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10">
-                  {recommendedEvents.slice(0, 3).map((event, idx) => {
-                    const isPast = isPastEvent(event);
-                    const isRegistered = registrations.some(r => r.eventId === event.id && r.participantEmail === currentUser?.email);
-                    const currentRegistrations = registrations.filter(r => r.eventId === event.id && r.status !== RegistrationStatus.REJECTED).length;
-                    const isFull = currentRegistrations >= event.capacity;
-                    const now = new Date();
-                    const startDate = new Date(event.date);
-                    const endDate = event.endDate ? new Date(event.endDate) : new Date(startDate.getTime() + 3600000);
-                    const isLive = now >= startDate && now <= endDate;
-                    const isPastBadge = now > endDate;
-                    const isClosed = event.isRegistrationOpen === false || now >= startDate;
-
-                    const remainingSpots = Math.max(0, Number(event.capacity) - currentRegistrations);
-
-                    return (
-                      <motion.div
-                        key={event.id}
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5, delay: idx * 0.1 }}
-                        className={`group glass-card rounded-[32px] overflow-hidden transition-all duration-500 flex flex-col h-full bg-[#0f172a]/40 border-orange-500/5 hover:border-orange-500/20 ${isPast ? 'opacity-50 grayscale' : ''}`}
-                      >
-                        <div className="relative h-56 overflow-hidden">
-                          <LazyEventImage eventId={event.id} initialSrc={event.imageUrl} alt={event.title} className="w-full h-full object-cover transform group-hover:scale-110 transition-transform duration-700" />
-                          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-
-                          {/* AI Pick Badge */}
-                          <div className="absolute top-4 left-4 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-orange-600 to-amber-500 text-[10px] font-black text-white uppercase tracking-wider shadow-xl shadow-orange-600/30">
-                            <Sparkles className="w-3 h-3" />
-                            AI Pick
-                          </div>
-
-                          <div className={`absolute top-4 right-4 backdrop-blur-md px-4 py-1.5 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl z-10 ${event.locationType === 'online' ? 'bg-orange-600/90 text-white border border-orange-400/30' : 'bg-slate-900/90 text-white border border-white/10'}`}>
-                            {event.locationType === 'online' ? 'Online' : 'Offline'}
-                          </div>
-
-                          <div className="absolute bottom-4 left-4 z-10 flex gap-2">
-                            {!isClosed && (
-                              <span className={`px-3 py-1 backdrop-blur-md rounded-lg text-[10px] font-bold border transition-colors ${remainingSpots === 0 ? 'bg-red-500/20 text-red-300 border-red-500/30' : remainingSpots <= 5 ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' : 'bg-white/10 text-white border-white/10 group-hover:bg-orange-600/50'}`}>
-                                {remainingSpots === 0 ? 'Sold Out' : `${remainingSpots} Spots Left`}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="p-8 flex-1 flex flex-col">
-                          <div className="flex items-center gap-3 text-[10px] font-black uppercase tracking-[0.2em] text-orange-500 mb-6 bg-orange-500/5 w-fit px-4 py-1.5 rounded-full border border-orange-500/10">
-                            <Calendar className="w-3.5 h-3.5" />
-                            {format(new Date(event.date), 'MMMM d, yyyy')}
-                          </div>
-
-                          <h3
-                            onClick={() => setSelectedEventForDetails(event)}
-                            className="text-2xl font-black text-white mb-3 font-outfit decoration-orange-500/50 decoration-2 underline-offset-8 cursor-pointer group-hover:text-orange-300 group-hover:translate-x-1 transition-all"
-                          >
-                            {event.title}
-                          </h3>
-
-                          <div className="flex items-center gap-2 text-slate-400 text-xs mb-5 font-medium opacity-80">
-                            <MapPin className="w-4 h-4 text-orange-400" />
-                            {renderLocation(event.location, event.locationType, "truncate max-w-[200px]")}
-                          </div>
-
-                          <p className="text-slate-400 text-sm line-clamp-2 mb-8 flex-1 leading-relaxed opacity-70 group-hover:opacity-100 transition-opacity">{event.description}</p>
-
-                          <div className="flex flex-col gap-4 mt-auto">
-                            <div className="flex items-center justify-between">
-                              {isLive && (
-                                <div className="flex items-center gap-1.5 text-[10px] font-black text-rose-500 animate-pulse bg-rose-500/10 border border-rose-500/20 px-3 py-1 rounded-full uppercase tracking-wider">
-                                  <div className="w-1.5 h-1.5 bg-rose-500 rounded-full shadow-[0_0_8px_rgba(244,63,94,0.8)]"></div>
-                                  Live Now
-                                </div>
-                              )}
-                              {isFull && !isRegistered && !isPastBadge && (
-                                <div className="text-[10px] font-black text-amber-500 bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full uppercase tracking-wider">
-                                  Event Full
-                                </div>
-                              )}
-                              {isPastBadge && (
-                                <div className="text-[10px] font-black text-slate-500 bg-slate-500/10 border border-slate-500/20 px-3 py-1 rounded-full uppercase tracking-wider">
-                                  Inactive
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              {isRegistered ? (
-                                <button
-                                  onClick={() => {
-                                    const reg = registrations.find(r => r.eventId === event.id && r.participantEmail === currentUser?.email);
-                                    if (reg) setSelectedRegistrationDetails(reg);
-                                  }}
-                                  className="flex-1 bg-white/5 border border-white/10 hover:bg-white/10 text-white font-bold font-outfit py-3 rounded-2xl transition-all flex items-center justify-center gap-2 group/btn"
-                                >
-                                  <CheckCircle className="w-5 h-5 text-orange-400 group-hover/btn:scale-110 transition-transform" />
-                                  View Registration
-                                </button>
-                              ) : (
-                                <button
-                                  disabled={isFull || isClosed}
-                                  onClick={async () => {
-                                    const fullEvent = await getEventById(event.id, { excludeImage: true });
-                                    setSelectedEventForReg(fullEvent || event);
-                                  }}
-                                  className="flex-1 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-bold font-outfit py-3 rounded-2xl transition-all shadow-lg shadow-orange-600/20 active:scale-95 disabled:opacity-50 disabled:grayscale disabled:cursor-not-allowed"
-                                >
-                                  {isFull ? 'Waitlisted' : (isClosed ? 'Registration Closed' : 'Secure Your Spot')}
-                                </button>
-                              )}
-
-                              <button
-                                onClick={() => setSelectedEventForDetails(event)}
-                                className="p-3 bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl text-slate-400 hover:text-white transition-all"
-                                title="View Details"
-                              >
-                                <ExternalLink className="w-5 h-5" />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </motion.div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
 
           {pastEvents.length > 0 && (
             <div className="mt-32">
@@ -3276,8 +3180,19 @@ export default function App() {
                 <div className="flex-1 h-px bg-white/5"></div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-                {pastEvents.map((event, idx) => renderEventCard(event, idx + upcomingEvents.length))}
+                {(showAllPastEvents ? pastEvents : pastEvents.slice(0, 4)).map((event, idx) => renderEventCard(event, idx + upcomingEvents.length))}
               </div>
+              {pastEvents.length > 4 && (
+                <div className="flex justify-center mt-12">
+                  <button
+                    onClick={() => setShowAllPastEvents(!showAllPastEvents)}
+                    className="px-8 py-3 bg-white/5 hover:bg-white/10 text-white font-bold font-outfit rounded-2xl transition-all border border-white/10 flex items-center gap-2"
+                  >
+                    {showAllPastEvents ? 'Show Less' : 'Show More Past Memories'}
+                    <ChevronDown className={`w-4 h-4 transition-transform ${showAllPastEvents ? 'rotate-180' : ''}`} />
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -4074,7 +3989,7 @@ export default function App() {
       {activeTab !== 'admin' && renderHeader()}
       <ToastContainer toasts={toasts} />
 
-      <main className="pt-6 px-4 sm:px-0 max-w-7xl mx-auto">
+      <main className="pt-6 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
         <Routes>
           <Route path="/" element={<Navigate to="/explore" replace />} />
           <Route path="/explore" element={renderEvents()} />
@@ -4085,9 +4000,53 @@ export default function App() {
               {currentUser?.role === 'admin' ? <AdminDashboard currentUser={currentUser} onLogout={handleLogout} /> : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Access Restricted</div>}
             </Suspense>
           } />
+          <Route path="/terms" element={<Suspense fallback={<div className="pt-32 text-center text-slate-400"><Loader2 className="w-8 h-8 animate-spin mx-auto text-orange-500" /></div>}><TermsPage /></Suspense>} />
+          <Route path="/privacy" element={<Suspense fallback={<div className="pt-32 text-center text-slate-400"><Loader2 className="w-8 h-8 animate-spin mx-auto text-orange-500" /></div>}><PrivacyPage /></Suspense>} />
+          <Route path="/refund" element={<Suspense fallback={<div className="pt-32 text-center text-slate-400"><Loader2 className="w-8 h-8 animate-spin mx-auto text-orange-500" /></div>}><RefundPage /></Suspense>} />
           <Route path="*" element={<Navigate to="/explore" replace />} />
         </Routes>
       </main>
+
+      {/* Footer */}
+      {activeTab !== 'admin' && (
+        <footer className="w-full bg-slate-900 border-t border-slate-800 mt-20 py-12 relative z-10">
+          <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-4 gap-8">
+            <div className="col-span-1 md:col-span-1">
+              <div className="flex items-center mb-4">
+                <span className="text-xl font-black font-outfit text-white tracking-tight">Eventron</span>
+              </div>
+              <p className="text-slate-400 text-sm">Where every moment becomes a legacy. Connect with the extraordinary.</p>
+            </div>
+            <div>
+              <h4 className="text-white font-bold mb-4 font-outfit">Explore</h4>
+              <ul className="space-y-2 text-sm text-slate-400">
+                <li><a href="#" onClick={(e) => { e.preventDefault(); navigate('/explore'); window.scrollTo(0, 0); }} className="hover:text-orange-400 transition-colors">Upcoming Events</a></li>
+                <li><a href="#" onClick={(e) => { e.preventDefault(); navigate('/explore'); window.scrollTo(0, document.body.scrollHeight / 2); }} className="hover:text-orange-400 transition-colors">Past Memories</a></li>
+                <li><a href="#" onClick={(e) => { e.preventDefault(); navigate('/explore'); window.scrollTo(0, 0); }} className="hover:text-orange-400 transition-colors">AI Recommendations</a></li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="text-white font-bold mb-4 font-outfit">Support</h4>
+              <ul className="space-y-2 text-sm text-slate-400">
+                <li><a href="#" onClick={(e) => { e.preventDefault(); addToast('Help Center is under construction', 'info'); }} className="hover:text-orange-400 transition-colors">Help Center</a></li>
+                <li><a href="#" onClick={(e) => { e.preventDefault(); addToast('Contact Us form coming soon', 'info'); }} className="hover:text-orange-400 transition-colors">Contact Us</a></li>
+                <li><a href="#" onClick={(e) => { e.preventDefault(); addToast('Issue reporting will be available soon', 'info'); }} className="hover:text-orange-400 transition-colors">Report an Issue</a></li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="text-white font-bold mb-4 font-outfit">Legal</h4>
+              <ul className="space-y-2 text-sm text-slate-400">
+                <li><a href="#" onClick={(e) => { e.preventDefault(); navigate('/terms'); window.scrollTo(0, 0); }} className="hover:text-orange-400 transition-colors">Terms and Conditions</a></li>
+                <li><a href="#" onClick={(e) => { e.preventDefault(); navigate('/privacy'); window.scrollTo(0, 0); }} className="hover:text-orange-400 transition-colors">Privacy Policy</a></li>
+                <li><a href="#" onClick={(e) => { e.preventDefault(); navigate('/refund'); window.scrollTo(0, 0); }} className="hover:text-orange-400 transition-colors">Refund & Cancellation Policy</a></li>
+              </ul>
+            </div>
+          </div>
+          <div className="max-w-7xl mx-auto px-6 mt-12 pt-8 border-t border-slate-800 text-center text-sm text-slate-500">
+            &copy; {new Date().getFullYear()} Eventron. All rights reserved.
+          </div>
+        </footer>
+      )}
 
       {renderAuthModal()}
       <Suspense fallback={null}>
@@ -4115,7 +4074,7 @@ export default function App() {
                     <div className="relative w-full sm:w-48 h-40 sm:h-32 bg-slate-950 rounded-xl border-2 border-dashed border-slate-700 flex items-center justify-center overflow-hidden group hover:border-orange-500/50 transition-colors">
                       {newEvent.imageUrl ? (
                         <>
-                          <img src={newEvent.imageUrl} alt="Preview" className="w-full h-full object-cover" />
+                          <img src={newEvent.imageUrl} alt="Preview" className="w-full h-full object-cover" onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80'; }} />
                           <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                             <p className="text-white text-xs flex items-center gap-1"><Upload className="w-4 h-4" /> Change</p>
                           </div>
@@ -4220,6 +4179,35 @@ export default function App() {
                       placeholder={newEvent.locationType === 'online' ? 'Zoom, Google Meet, etc.' : 'City or Venue'}
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Event Tags</label>
+                  <div className="flex flex-wrap gap-2">
+                    {['AI', 'ML', 'Conference', 'Tech', 'Hackathon', 'Networking', 'Startup', 'Workshop', 'Design'].map((tag) => (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => {
+                          const tags = newEvent.tags || [];
+                          if (tags.includes(tag)) {
+                            setNewEvent({ ...newEvent, tags: tags.filter(t => t !== tag) });
+                          } else {
+                            if (tags.length >= 5) return; // Limit to 5 tags
+                            setNewEvent({ ...newEvent, tags: [...tags, tag] });
+                          }
+                        }}
+                        className={`py-1.5 px-3 rounded-lg border text-xs font-medium transition-all ${
+                          (newEvent.tags || []).includes(tag)
+                            ? 'bg-orange-900/40 border-orange-500 text-orange-400 shadow-lg shadow-orange-900/20'
+                            : 'bg-slate-950 border-slate-700 text-slate-500 hover:border-slate-600'
+                        }`}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">Select up to 5 tags to improve AI recommendations.</p>
                 </div>
 
                 <div>
@@ -6293,7 +6281,7 @@ export default function App() {
 
                         return (
                           <div className="space-y-4">
-                            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                            <div className="flex flex-wrap gap-2">
                               {visibleAttendees.map((attendee) => (
                                 <ParticipantAvatar
                                   key={attendee.id}

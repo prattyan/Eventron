@@ -1696,7 +1696,7 @@ export const addReview = async (review: Omit<any, 'id'>): Promise<void> => {
 
 // --- Account Management ---
 
-export const sendEmailDeleteOtp = async (email: string, userId: string): Promise<{ success: boolean; message: string }> => {
+export const sendEmailDeleteOtp = async (email: string, userId: string): Promise<{ success: boolean; message: string; dev_otp?: string }> => {
   try {
     const response = await fetch('/api/auth/email/send-delete-otp', {
       method: 'POST',

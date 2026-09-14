@@ -66,6 +66,7 @@ export interface Event {
   };
   settlementStatus?: 'NOT_PROCESSED' | 'PROCESSING' | 'PROCESSED';
   status?: EventStatus;
+  tags?: string[];
 }
 
 export enum RegistrationStatus {

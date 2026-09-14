@@ -248,7 +248,7 @@ export default function AdminDashboard({ currentUser, onLogout }: AdminDashboard
                                                 <div key={event!.id} className="flex items-center justify-between p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors">
                                                     <div className="flex items-center gap-3 overflow-hidden">
                                                         <div className="w-10 h-10 rounded-lg bg-slate-800 flex-shrink-0 overflow-hidden">
-                                                            {event!.imageUrl && <img src={event!.imageUrl} className="w-full h-full object-cover" />}
+                                                            {event!.imageUrl && <img src={event!.imageUrl} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80'; }} />}
                                                         </div>
                                                         <div className="min-w-0 pr-4">
                                                             <p className="font-bold text-white text-sm truncate">{event!.title}</p>
@@ -409,7 +409,7 @@ export default function AdminDashboard({ currentUser, onLogout }: AdminDashboard
                                                             <div className="flex items-center gap-3">
                                                                 <div className="w-12 h-12 rounded-lg bg-slate-800 overflow-hidden flex-shrink-0">
                                                                     {event.imageUrl && (
-                                                                        <img src={event.imageUrl} alt={event.title} className="w-full h-full object-cover" />
+                                                                        <img src={event.imageUrl} alt={event.title} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80'; }} />
                                                                     )}
                                                                 </div>
                                                                 <div>
@@ -498,7 +498,7 @@ export default function AdminDashboard({ currentUser, onLogout }: AdminDashboard
                                                                 <div className="flex items-center gap-3">
                                                                     <div className="w-10 h-10 rounded-lg bg-slate-800 overflow-hidden flex-shrink-0">
                                                                         {event.imageUrl && (
-                                                                            <img src={event.imageUrl} alt={event.title} className="w-full h-full object-cover" />
+                                                                            <img src={event.imageUrl} alt={event.title} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80'; }} />
                                                                         )}
                                                                     </div>
                                                                     <div>
@@ -592,7 +592,7 @@ export default function AdminDashboard({ currentUser, onLogout }: AdminDashboard
                                                         <td className="px-6 py-4">
                                                             <div className="flex items-center gap-3">
                                                                 <div className="w-12 h-12 rounded-lg bg-slate-800 overflow-hidden flex-shrink-0">
-                                                                    {event.imageUrl && <img src={event.imageUrl} className="w-full h-full object-cover" />}
+                                                                    {event.imageUrl && <img src={event.imageUrl} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80'; }} />}
                                                                 </div>
                                                                 <div>
                                                                     <p className="font-bold text-white line-clamp-1">{event.title}</p>
@@ -762,7 +762,7 @@ export default function AdminDashboard({ currentUser, onLogout }: AdminDashboard
                                 <div className="flex gap-6">
                                     <div className="w-32 h-32 rounded-2xl bg-slate-800 overflow-hidden flex-shrink-0 border border-white/10">
                                         {selectedEvent.imageUrl ? (
-                                            <img src={selectedEvent.imageUrl} alt={selectedEvent.title} className="w-full h-full object-cover" />
+                                            <img src={selectedEvent.imageUrl} alt={selectedEvent.title} className="w-full h-full object-cover" onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&q=80'; }} />
                                         ) : (
                                             <div className="w-full h-full flex items-center justify-center text-slate-600">
                                                 <Calendar className="w-10 h-10 opacity-50" />
