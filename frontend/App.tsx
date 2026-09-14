@@ -1395,7 +1395,7 @@ export default function App() {
 
       const isCapacityFull = currentRegCount >= (selectedEventForReg.capacity as number);
       let initialStatus = isCapacityFull ? RegistrationStatus.WAITLISTED : RegistrationStatus.PENDING;
-      
+
       if (teamRegistrationData.mode === 'team') {
         initialStatus = RegistrationStatus.TEAM_AWAITING_SUBMISSION;
       }
@@ -1535,7 +1535,7 @@ export default function App() {
     const event = events.find(e => e.id === (teamRegs[0]?.eventId || teamObj?.eventId));
     const minSize = event?.minTeamSize || 1;
     const membersCount = Math.max(teamRegs.length, teamObj?.members?.length || 0);
-    
+
     if (membersCount < minSize) {
       addToast(`Your team is incomplete. You need at least ${minSize} members to submit (Current: ${membersCount}).`, 'error');
       return;
@@ -1543,7 +1543,7 @@ export default function App() {
 
     const teamName = teamRegs[0]?.teamName || teamObj?.name || 'Team';
     if (!window.confirm(`Submit team "${teamName}" with ${membersCount} members for organizer approval?`)) return;
-    
+
     setIsRegistering(true);
     try {
       await Promise.all(teamRegs.map(r => updateRegistrationStatus(r.id, RegistrationStatus.PENDING)));
@@ -2366,13 +2366,12 @@ export default function App() {
                           }
                         }}
                         title={twilioStatus.isAvailable ? "Login with Phone" : "Phone login unavailable (Twilio offline or trial expired)"}
-                        className={`flex-1 py-1.5 rounded-full text-xs font-bold uppercase transition-all relative z-10 flex items-center justify-center gap-1.5 ${
-                          loginMethod === 'phone'
+                        className={`flex-1 py-1.5 rounded-full text-xs font-bold uppercase transition-all relative z-10 flex items-center justify-center gap-1.5 ${loginMethod === 'phone'
                             ? 'text-white'
                             : twilioStatus.isAvailable
-                            ? 'text-zinc-500 hover:text-zinc-300'
-                            : 'text-zinc-600 opacity-50 cursor-not-allowed'
-                        }`}
+                              ? 'text-zinc-500 hover:text-zinc-300'
+                              : 'text-zinc-600 opacity-50 cursor-not-allowed'
+                          }`}
                       >
                         <span>Phone</span>
                         {!twilioStatus.isAvailable && twilioStatus.checked && (
@@ -2989,13 +2988,7 @@ export default function App() {
                         )
                       )}
 
-                      <button
-                        onClick={() => setSelectedEventForDetails(event)}
-                        className="p-3 bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl text-slate-400 hover:text-white transition-all"
-                        title="View Details"
-                      >
-                        <ExternalLink className="w-5 h-5" />
-                      </button>
+
                     </div>
                   </div>
                 );
@@ -3836,7 +3829,7 @@ export default function App() {
                       )}
                     </div>
                   )}
-                  
+
                   {group.regs.map(reg => (
                     <div key={reg.id} className="bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-sm flex flex-col gap-3">
                       <div className="flex justify-between items-start">
@@ -5281,11 +5274,10 @@ export default function App() {
                                 isPhoneVerified: newFullPhone === currentUser?.phoneNumber
                               }));
                             }}
-                            className={`w-full pl-4 pr-4 py-3 rounded-2xl bg-[#1e293b] border text-white font-mono font-medium outline-none transition-all ${
-                              profileForm.isPhoneVerified
+                            className={`w-full pl-4 pr-4 py-3 rounded-2xl bg-[#1e293b] border text-white font-mono font-medium outline-none transition-all ${profileForm.isPhoneVerified
                                 ? 'border-green-500/40 bg-green-950/20 text-green-200'
                                 : 'border-slate-700/60 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20'
-                            } disabled:opacity-60 disabled:cursor-not-allowed`}
+                              } disabled:opacity-60 disabled:cursor-not-allowed`}
                           />
                         </div>
 
@@ -5492,7 +5484,7 @@ export default function App() {
                     </label>
                     <span className="text-[10px] text-slate-500 font-mono">6 Digits</span>
                   </div>
-                  
+
                   <input
                     type="text"
                     inputMode="numeric"
@@ -5785,36 +5777,36 @@ export default function App() {
                     )}
 
                     <div className="pt-6 mt-4 border-t border-slate-800 space-y-3">
-                      {selectedRegistrationDetails.participationType === 'team' && 
-                       selectedRegistrationDetails.isTeamLeader && 
-                       selectedRegistrationDetails.status === RegistrationStatus.TEAM_AWAITING_SUBMISSION && (
-                        (() => {
-                          const event = events.find(e => e.id === selectedRegistrationDetails.eventId);
-                          const teamObj = teams.find(t => t.id === selectedRegistrationDetails.teamId);
-                          const teamRegs = registrations.filter(r => r.teamId === selectedRegistrationDetails.teamId && r.status !== RegistrationStatus.REJECTED);
-                          const membersCount = Math.max(teamRegs.length, teamObj?.members?.length || 0);
-                          const minSize = event?.minTeamSize || 1;
-                          const isIncomplete = membersCount < minSize;
-                          
-                          return (
-                            <div className="space-y-2">
-                              <button
-                                disabled={isIncomplete}
-                                onClick={() => selectedRegistrationDetails.teamId && handleTeamSubmit(selectedRegistrationDetails.teamId)}
-                                className={`w-full flex items-center justify-center gap-3 font-black font-outfit py-4 rounded-2xl transition-all shadow-lg group/submit ${isIncomplete ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-orange-600 hover:bg-orange-700 text-white shadow-orange-600/20'}`}
-                              >
-                                {isIncomplete ? <AlertCircle className="w-5 h-5 text-amber-500" /> : <CheckCircle className="w-5 h-5 group-hover/submit:scale-110 transition-transform" />}
-                                {isIncomplete ? 'Complete Team to Submit' : 'Submit Team for Approval'}
-                              </button>
-                              {isIncomplete && (
-                                <p className="text-[10px] text-center text-amber-500 font-bold uppercase tracking-wider animate-pulse">
-                                  {minSize - membersCount} more member{minSize - membersCount !== 1 ? 's' : ''} required to finalize (Min: {minSize})
-                                </p>
-                              )}
-                            </div>
-                          );
-                        })()
-                      )}
+                      {selectedRegistrationDetails.participationType === 'team' &&
+                        selectedRegistrationDetails.isTeamLeader &&
+                        selectedRegistrationDetails.status === RegistrationStatus.TEAM_AWAITING_SUBMISSION && (
+                          (() => {
+                            const event = events.find(e => e.id === selectedRegistrationDetails.eventId);
+                            const teamObj = teams.find(t => t.id === selectedRegistrationDetails.teamId);
+                            const teamRegs = registrations.filter(r => r.teamId === selectedRegistrationDetails.teamId && r.status !== RegistrationStatus.REJECTED);
+                            const membersCount = Math.max(teamRegs.length, teamObj?.members?.length || 0);
+                            const minSize = event?.minTeamSize || 1;
+                            const isIncomplete = membersCount < minSize;
+
+                            return (
+                              <div className="space-y-2">
+                                <button
+                                  disabled={isIncomplete}
+                                  onClick={() => selectedRegistrationDetails.teamId && handleTeamSubmit(selectedRegistrationDetails.teamId)}
+                                  className={`w-full flex items-center justify-center gap-3 font-black font-outfit py-4 rounded-2xl transition-all shadow-lg group/submit ${isIncomplete ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-orange-600 hover:bg-orange-700 text-white shadow-orange-600/20'}`}
+                                >
+                                  {isIncomplete ? <AlertCircle className="w-5 h-5 text-amber-500" /> : <CheckCircle className="w-5 h-5 group-hover/submit:scale-110 transition-transform" />}
+                                  {isIncomplete ? 'Complete Team to Submit' : 'Submit Team for Approval'}
+                                </button>
+                                {isIncomplete && (
+                                  <p className="text-[10px] text-center text-amber-500 font-bold uppercase tracking-wider animate-pulse">
+                                    {minSize - membersCount} more member{minSize - membersCount !== 1 ? 's' : ''} required to finalize (Min: {minSize})
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })()
+                        )}
 
                       {selectedRegistrationDetails.status === RegistrationStatus.APPROVED && (
                         <button
