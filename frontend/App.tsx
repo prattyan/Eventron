@@ -1261,7 +1261,7 @@ export default function App() {
       
       const generatedImageUrl = `https://loremflickr.com/800/400/${encodeURIComponent(tagsForImage)}?random=${Math.floor(Math.random() * 1000)}`;
 
-      const evtDataCommon = {
+      const evtDataCommon: any = {
         title: newEvent.title,
         date: newEvent.date,
         endDate: newEvent.endDate,
@@ -1269,7 +1269,6 @@ export default function App() {
         locationType: newEvent.locationType,
         description: newEvent.description,
         capacity: parseInt(newEvent.capacity) || 0,
-        imageUrl: newEvent.imageUrl || generatedImageUrl,
         customQuestions: newEvent.customQuestions || [],
         collaboratorEmails: newEvent.collaboratorEmails || [],
         tags: newEvent.tags || [],
@@ -1283,6 +1282,12 @@ export default function App() {
         promoCodes: newEvent.promoCodes,
         organizerPaymentDetails: newEvent.organizerPaymentDetails
       };
+
+      if (newEvent.imageUrl && newEvent.imageUrl.includes('/api/event-image/')) {
+        // Prevent overwriting the database base64 string with the API fetch URL
+      } else {
+        evtDataCommon.imageUrl = newEvent.imageUrl || generatedImageUrl;
+      }
 
       if (new Date(evtDataCommon.endDate) <= new Date(evtDataCommon.date)) {
         addToast('End date must be after start date', 'error');
