@@ -1280,7 +1280,10 @@ export default function App() {
     try {
       const imageStr = await getEventImage(fullEvent.id);
       if (imageStr) {
-        setNewEvent(prev => ({ ...prev, imageUrl: imageStr }));
+        setNewEvent(prev => {
+          if (prev.imageUrl && prev.imageUrl.startsWith('data:')) return prev;
+          return { ...prev, imageUrl: imageStr };
+        });
       }
     } catch (e) {
       console.error("Background image fetch failed", e);

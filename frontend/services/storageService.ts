@@ -292,7 +292,7 @@ export const getEventImage = async (id: string): Promise<string | null> => {
   if (USE_MONGO) {
     // We now use the dedicated high-speed binary endpoint which is cached on the server
     const baseUrl = import.meta.env.VITE_API_URL || '';
-    return `${baseUrl}/api/event-image/${id}`;
+    return `${baseUrl}/api/event-image/${id}?t=${Date.now()}`;
   }
   return null;
 };

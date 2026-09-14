@@ -600,6 +600,11 @@ async def data_action(action: str, request: Request):
         elif action == "updateOne":
             result = await asyncio.to_thread(col.update_one, filter_doc, update)
 
+            if collection_name == "events":
+                event_id = filter_doc.get("id") or filter_doc.get("_id")
+                if event_id:
+                    cache.delete(f"img:{event_id}")
+
             if collection_name in ("events", "registrations", "teams", "messages"):
                 await sio.emit("data_updated", {
                     "collection": collection_name,
