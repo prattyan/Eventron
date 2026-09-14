@@ -1687,7 +1687,8 @@ export default function App() {
       }
 
       // Create Order
-      const orderRes = await fetch('/api/create-payment-order', {
+      const baseUrl = import.meta.env.VITE_API_URL || '';
+      const orderRes = await fetch(`${baseUrl}/api/create-payment-order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1720,7 +1721,8 @@ export default function App() {
         handler: async function (response: any) {
           // Verify payment & increment promo usage on backend
           try {
-            await fetch('/api/verify-payment', {
+            const baseUrl = import.meta.env.VITE_API_URL || '';
+            await fetch(`${baseUrl}/api/verify-payment`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -4950,7 +4952,8 @@ export default function App() {
                         try {
                           setPaymentPromoMessage(null);
                           addToast('Verifying code...', 'info');
-                          const res = await fetch('/api/verify-promo', {
+                          const baseUrl = import.meta.env.VITE_API_URL || '';
+                          const res = await fetch(`${baseUrl}/api/verify-promo`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({

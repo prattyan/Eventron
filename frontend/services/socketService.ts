@@ -2,7 +2,7 @@ import { io, Socket } from 'socket.io-client';
 
 // Use localhost for development. In production, this would be your server's URL.
 const IS_PROD = typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
-const SOCKET_URL = IS_PROD ? window.location.origin : `http://${window.location.hostname}:5005`;
+const SOCKET_URL = IS_PROD ? (import.meta.env.VITE_API_URL || window.location.origin) : `http://${window.location.hostname}:5005`;
 
 class SocketService {
     private socket: Socket | null = null;

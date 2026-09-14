@@ -143,7 +143,8 @@ async function mongoRequest(action: string, collection: string, body: any, retri
 export const getVectorRecommendations = async (userId: string): Promise<Event[]> => {
   if (!USE_MONGO) return [];
   try {
-    const response = await fetch('/api/recommendations', {
+    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const response = await fetch(`${baseUrl}/api/recommendations`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId })
@@ -290,7 +291,8 @@ export const getEvents = async (): Promise<Event[]> => {
 export const getEventImage = async (id: string): Promise<string | null> => {
   if (USE_MONGO) {
     // We now use the dedicated high-speed binary endpoint which is cached on the server
-    return `/api/event-image/${id}`;
+    const baseUrl = import.meta.env.VITE_API_URL || '';
+    return `${baseUrl}/api/event-image/${id}`;
   }
   return null;
 };
@@ -1155,7 +1157,8 @@ export interface TwilioAuthStatus {
 
 export const getTwilioAuthStatus = async (): Promise<TwilioAuthStatus> => {
   try {
-    const response = await fetch('/api/auth/twilio/status');
+    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const response = await fetch(`${baseUrl}/api/auth/twilio/status`);
     if (!response.ok) {
       return {
         isConfigured: false,
@@ -1177,7 +1180,8 @@ export const getTwilioAuthStatus = async (): Promise<TwilioAuthStatus> => {
 
 export const sendTwilioOtp = async (phoneNumber: string, channel: 'sms' | 'whatsapp' = 'sms'): Promise<{ success: boolean; status?: string; message?: string; channel?: string }> => {
   try {
-    const response = await fetch('/api/auth/twilio/send-otp', {
+    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const response = await fetch(`${baseUrl}/api/auth/twilio/send-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phoneNumber, channel }),
@@ -1197,7 +1201,8 @@ export const sendTwilioOtp = async (phoneNumber: string, channel: 'sms' | 'whats
 
 export const verifyTwilioOtp = async (phoneNumber: string, otp: string): Promise<User | null> => {
   try {
-    const response = await fetch('/api/auth/twilio/verify-otp', {
+    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const response = await fetch(`${baseUrl}/api/auth/twilio/verify-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phoneNumber, otp }),
@@ -1475,7 +1480,8 @@ export const addNotification = async (notification: Omit<any, 'id'>): Promise<vo
 
   // Trigger Push Notification
   try {
-    fetch('/api/send-push', {
+    const baseUrl = import.meta.env.VITE_API_URL || '';
+    fetch(`${baseUrl}/api/send-push`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1698,7 +1704,8 @@ export const addReview = async (review: Omit<any, 'id'>): Promise<void> => {
 
 export const sendEmailDeleteOtp = async (email: string, userId: string): Promise<{ success: boolean; message: string; dev_otp?: string }> => {
   try {
-    const response = await fetch('/api/auth/email/send-delete-otp', {
+    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const response = await fetch(`${baseUrl}/api/auth/email/send-delete-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, userId }),
@@ -1722,7 +1729,8 @@ export const verifyEmailDeleteOtp = async (
   isOrganizer: boolean
 ): Promise<{ success: boolean; message: string }> => {
   try {
-    const response = await fetch('/api/auth/email/verify-delete-otp', {
+    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const response = await fetch(`${baseUrl}/api/auth/email/verify-delete-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, userId, otp, isOrganizer }),
