@@ -267,6 +267,37 @@ const getCroppedImg = (imageSrc: string, pixelCrop: any): Promise<string> => {
   });
 };
 
+const resizeImage = (imageSrc: string, maxDimension: number = 1024): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.src = imageSrc;
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('No 2d context'));
+        return;
+      }
+      let targetWidth = image.width;
+      let targetHeight = image.height;
+      if (targetWidth > maxDimension || targetHeight > maxDimension) {
+        if (targetWidth > targetHeight) {
+          targetHeight = (targetHeight / targetWidth) * maxDimension;
+          targetWidth = maxDimension;
+        } else {
+          targetWidth = (targetWidth / targetHeight) * maxDimension;
+          targetHeight = maxDimension;
+        }
+      }
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
+      resolve(canvas.toDataURL('image/jpeg', 0.8));
+    };
+    image.onerror = (e) => reject(e);
+  });
+};
+
 
 
 const loadRazorpay = () => {
@@ -452,12 +483,12 @@ export default function App() {
 
   // Form States
   const [newEvent, setNewEvent] = useState<{
-    title: string; date: string; endDate: string; location: string; locationType: 'online' | 'offline'; description: string; capacity: string; imageUrl: string; customQuestions: CustomQuestion[]; collaboratorEmails: string[];
+    title: string; date: string; endDate: string; location: string; locationType: 'online' | 'offline'; description: string; capacity: string; imageUrl: string; customQuestions: CustomQuestion[]; collaboratorEmails: string[]; tags: string[];
     participationMode: ParticipationMode; maxTeamSize: string; minTeamSize: string;
     isPaid: boolean; price: string; promoCodes: PromoCode[];
     organizerPaymentDetails?: { upiId?: string; bankDetails?: { accountNumber: string; ifsc: string; accountName: string; }; };
   }>({
-    title: '', date: '', endDate: '', location: '', locationType: 'offline', description: '', capacity: '', imageUrl: '', customQuestions: [], collaboratorEmails: [],
+    title: '', date: '', endDate: '', location: '', locationType: 'offline', description: '', capacity: '', imageUrl: '', customQuestions: [], collaboratorEmails: [], tags: [],
     participationMode: 'individual', maxTeamSize: '5', minTeamSize: '2',
     isPaid: false, price: '', promoCodes: [],
     organizerPaymentDetails: undefined
@@ -1144,9 +1175,15 @@ export default function App() {
       setCropPurpose(purpose);
 
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setTempImageSrc(reader.result as string);
-        setIsCropperOpen(true);
+      reader.onloadend = async () => {
+        if (purpose === 'event') {
+          // Bypass cropper to keep original poster uncropped
+          const resized = await resizeImage(reader.result as string, 1024);
+          setNewEvent(prev => ({ ...prev, imageUrl: resized }));
+        } else {
+          setTempImageSrc(reader.result as string);
+          setIsCropperOpen(true);
+        }
       };
       reader.readAsDataURL(file);
       e.target.value = '';
@@ -1187,7 +1224,7 @@ export default function App() {
 
   const resetEventForm = () => {
     setNewEvent({
-      title: '', date: '', endDate: '', location: '', locationType: 'offline', description: '', capacity: '', imageUrl: '', customQuestions: [], collaboratorEmails: [],
+      title: '', date: '', endDate: '', location: '', locationType: 'offline', description: '', capacity: '', imageUrl: '', customQuestions: [], collaboratorEmails: [], tags: [],
       participationMode: 'individual', maxTeamSize: '5', minTeamSize: '2',
       isPaid: false, price: '', promoCodes: [],
       organizerPaymentDetails: undefined
@@ -1259,7 +1296,7 @@ export default function App() {
         ? newEvent.tags.join(',') 
         : 'technology,abstract';
       
-      const generatedImageUrl = `https://loremflickr.com/800/400/${encodeURIComponent(tagsForImage)}?random=${Math.floor(Math.random() * 1000)}`;
+      const generatedImageUrl = `https://picsum.photos/seed/${Math.floor(Math.random() * 1000000)}/800/400`;
 
       const evtDataCommon: any = {
         title: newEvent.title,
