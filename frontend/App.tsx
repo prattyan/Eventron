@@ -371,18 +371,18 @@ const AuthLeftPanel = ({ setIsAuthMode }: { setIsAuthMode: (mode: 'signin' | 'si
 
       {/* Bottom Profile Info */}
       <div className="relative z-10 flex items-center justify-between w-full mt-auto">
-         <div className="flex items-center gap-3">
-           <div className="w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center overflow-hidden border border-white/20">
-             <img src="/favicon.png" alt="Eventron" className="w-full h-full object-cover" />
-           </div>
-           <div>
-             <p className="text-white font-bold text-sm">Eventron</p>
-           </div>
-         </div>
-         <div className="flex items-center gap-2">
-           <button onClick={handlePrev} className="w-8 h-8 rounded-full border border-white/30 flex items-center justify-center text-white/80 hover:bg-white/10 transition-colors backdrop-blur-sm"><ChevronLeft className="w-4 h-4" /></button>
-           <button onClick={handleNext} className="w-8 h-8 rounded-full border border-white/30 flex items-center justify-center text-white/80 hover:bg-white/10 transition-colors backdrop-blur-sm"><ChevronRight className="w-4 h-4" /></button>
-         </div>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center overflow-hidden border border-white/20">
+            <img src="/favicon.png" alt="Eventron" className="w-full h-full object-cover" />
+          </div>
+          <div>
+            <p className="text-white font-bold text-sm">Eventron</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={handlePrev} className="w-8 h-8 rounded-full border border-white/30 flex items-center justify-center text-white/80 hover:bg-white/10 transition-colors backdrop-blur-sm"><ChevronLeft className="w-4 h-4" /></button>
+          <button onClick={handleNext} className="w-8 h-8 rounded-full border border-white/30 flex items-center justify-center text-white/80 hover:bg-white/10 transition-colors backdrop-blur-sm"><ChevronRight className="w-4 h-4" /></button>
+        </div>
       </div>
     </motion.div>
   );
@@ -860,6 +860,16 @@ export default function App() {
       if (!isSilent) setDataLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (location.pathname === '/') {
+      if (currentUser) {
+        navigate('/explore');
+      } else {
+        setIsAuthModalOpen(true);
+      }
+    }
+  }, [location.pathname, currentUser, navigate]);
 
   useEffect(() => {
     if (currentUser?.role === 'admin' && activeTab !== 'admin') {
@@ -1361,9 +1371,9 @@ export default function App() {
 
     try {
       const tagsForImage = (newEvent.tags && newEvent.tags.length > 0)
-        ? newEvent.tags.join(',') 
+        ? newEvent.tags.join(',')
         : 'technology,abstract';
-      
+
       const generatedImageUrl = `https://picsum.photos/seed/${Math.floor(Math.random() * 1000000)}/800/400`;
 
       const evtDataCommon: any = {
@@ -2167,7 +2177,8 @@ export default function App() {
               el.style.paddingRight = '20px';
               el.style.maxWidth = 'none';
               el.style.textOverflow = 'clip';
-            }
+
+            }
           }
         },
       });
@@ -2328,13 +2339,13 @@ export default function App() {
   // --- Views ---
 
   const renderAuthModal = () => {
-    if (!isAuthModalOpen && currentUser) return null;
+    if (!isAuthModalOpen) return null;
 
     return (
       <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 md:p-12 overflow-hidden bg-[#16161a]">
         {/* Modal Container */}
         <motion.div layout transition={{ type: "tween", ease: [0.16, 1, 0.3, 1], duration: 0.8 }} className={`bg-[#1c1c21] rounded-[2rem] shadow-2xl overflow-hidden w-full max-w-6xl flex flex-col ${isAuthMode === 'signup' ? 'md:flex-row-reverse' : 'md:flex-row'} relative z-10 mx-auto min-h-0 h-full max-h-[800px] border border-zinc-800`}>
-          
+
           {/* Close button (mobile mostly, or overall) */}
           <button
             onClick={() => setIsAuthModalOpen(false)}
@@ -2347,20 +2358,13 @@ export default function App() {
 
           {/* Right Panel - Auth Form */}
           <motion.div layout transition={{ type: "tween", ease: [0.16, 1, 0.3, 1], duration: 0.8 }} className="w-full md:w-[55%] p-8 md:p-14 bg-[#1c1c21] flex flex-col relative">
-            
-            {/* Top Header - Branding & Lang */}
-            <div className="flex justify-between items-center mb-16 md:mb-24 w-full">
-              <span className="text-[#ff5c35] font-black tracking-tight text-xl">EVENTRON</span>
-              <div className="flex items-center gap-1 px-3 py-1.5 rounded-full border border-zinc-700 bg-zinc-800/50 text-white text-xs font-medium cursor-pointer hover:bg-zinc-800 transition-colors">
-                <span className="flex items-center gap-1.5">
-                  <svg viewBox="0 0 24 24" className="w-3 h-3 rounded-full overflow-hidden" fill="none"><path fill="#012169" d="M0 0h24v24H0z"/><path fill="#fff" d="M0 0l24 24M24 0L0 24" stroke="#fff" strokeWidth="2.5"/><path fill="#C8102E" d="M0 0l24 24M24 0L0 24" stroke="#C8102E" strokeWidth="1.5"/><path fill="#fff" d="M10 0v24h4V0zM0 10h24v4H0z"/><path fill="#C8102E" d="M11 0v24h2V0zM0 11h24v2H0z"/></svg>
-                  EN
-                </span>
-                <ChevronDown className="w-3 h-3 ml-1" />
-              </div>
-            </div>
 
             <div className="w-full max-w-[360px] mx-auto flex-1 flex flex-col justify-center">
+              {/* Top Header - Branding */}
+              <div className="flex justify-start items-center mb-12 w-full">
+                <img src="/eventron.png" alt="Eventron" className="h-8 md:h-10 object-contain" />
+              </div>
+
               <AnimatePresence mode="wait">
                 <motion.div
                   key={isAuthMode}
@@ -2371,272 +2375,287 @@ export default function App() {
                   className="flex flex-col w-full"
                 >
                   {/* Heading */}
-              <div className="text-center mb-6">
-                {showOtpInput ? (
-                  <>
-                    <p className="text-[10px] font-bold text-zinc-500 tracking-[0.2em] uppercase mb-4">Component · 104</p>
-                    <h2 className="text-3xl font-bold text-white mb-2 tracking-tight">
-                      Verify code <span className="text-[#ff5c35]">EVENTRON</span>
-                    </h2>
-                    <p className="text-zinc-400 text-sm">Raised is empty. Sunk is filled.</p>
-                  </>
-                ) : (
-                  <>
-                    <h2 className="text-4xl font-bold text-white mb-3 tracking-tight">
-                      {isAuthMode === 'signin' ? 'Welcome Back' : isAuthMode === 'forgot-password' ? 'Reset Password' : 'Create Account'}
-                    </h2>
-                    <p className="text-zinc-400 text-sm">
-                      {isAuthMode === 'signin' ? 'Welcome to Eventron' : isAuthMode === 'forgot-password' ? 'Enter your email to receive a reset link' : 'Join Eventron'}
-                    </p>
-                  </>
-                )}
-              </div>
-
-              {/* Form Content */}
-              {isAuthMode === 'forgot-password' ? (
-                <form onSubmit={handlePasswordReset} className="space-y-4">
-                  <div className="relative">
-                    <input
-                      id="reset-email"
-                      type="email"
-                      required
-                      placeholder="Email"
-                      className="w-full px-5 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
-                      value={resetEmail}
-                      onChange={e => setResetEmail(e.target.value)}
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className="w-full bg-[#ff5c35] hover:bg-[#e04d2a] text-white font-medium py-3.5 rounded-full transition-colors mt-6 shadow-lg shadow-orange-900/20"
-                  >
-                    {authLoading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Send Reset Link'}
-                  </button>
-                  <div className="text-center mt-4">
-                    <button
-                      type="button"
-                      onClick={() => setIsAuthMode('signin')}
-                      className="text-zinc-500 text-xs hover:text-white transition-colors"
-                    >
-                      ← Back to Sign In
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <div className="space-y-4">
-                  
-                  {isAuthMode === 'signup' && (
-                    <input
-                      type="text"
-                      required
-                      placeholder="Full Name"
-                      className="w-full px-5 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
-                      value={authForm.name}
-                      onChange={e => setAuthForm({ ...authForm, name: e.target.value })}
-                    />
-                  )}
-
-                  {(loginMethod === 'email' || isAuthMode === 'signup') ? (
-                    <>
-                      <input
-                        type="email"
-                        required
-                        placeholder="Email"
-                        className="w-full px-5 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
-                        value={authForm.email}
-                        onChange={e => setAuthForm({ ...authForm, email: e.target.value })}
-                      />
-                      <input
-                        type="password"
-                        required
-                        placeholder="Password"
-                        className="w-full px-5 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
-                        value={authForm.password}
-                        onChange={e => setAuthForm({ ...authForm, password: e.target.value })}
-                      />
-                      {isAuthMode === 'signin' && (
-                         <div className="text-right">
-                           <button
-                             type="button"
-                             onClick={() => setIsAuthMode('forgot-password')}
-                             className="text-xs text-[#ff5c35] hover:text-[#e04d2a] transition-colors font-medium mt-2"
-                           >
-                             Forgot password?
-                           </button>
-                         </div>
-                      )}
-                    </>
-                  ) : (
-                    <div>
-                      {!showOtpInput ? (
-                        <div className="flex gap-2">
-                          <div className="relative w-28 shrink-0">
-                            <select
-                              value={loginDialCode}
-                              onChange={e => setLoginDialCode(e.target.value)}
-                              className="w-full h-full px-3 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white text-xs font-medium outline-none appearance-none cursor-pointer pr-7"
-                            >
-                              {COUNTRY_CODES.map(c => (
-                                <option key={c.code} value={c.dialCode} className="bg-zinc-900 text-white py-1">
-                                  {c.dialCode}
-                                </option>
-                              ))}
-                            </select>
-                            <ChevronDown className="w-3 h-3 text-zinc-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                          </div>
-                          <input
-                            type="tel"
-                            inputMode="numeric"
-                            required
-                            placeholder="Phone Number"
-                            className="w-full px-4 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
-                            value={loginNationalNumber}
-                            onChange={e => setLoginNationalNumber(e.target.value.replace(/[^0-9\s-]/g, ''))}
-                          />
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-center pt-0 w-full">
-                          {/* Lock Icon */}
-                          <div className="w-16 h-16 rounded-full neumorphic-raised flex items-center justify-center mb-4 text-[#ff5c35]">
-                            <Lock className="w-6 h-6" />
-                          </div>
-                          
-                          {/* Title */}
-                          <h3 className="text-xl font-semibold text-white mb-2">Verify your identity</h3>
-                          <p className="text-sm text-zinc-400 mb-6 text-center leading-relaxed">
-                            We sent a 6-digit code to<br />
-                            <span className="font-semibold text-white">{loginDialCode} {loginNationalNumber}</span>
-                          </p>
-                          
-                          {/* Custom OTP Input */}
-                          <div className="relative flex gap-2 sm:gap-4 justify-center mb-6 w-full">
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              maxLength={6}
-                              className="absolute inset-0 opacity-0 z-10 cursor-text w-full h-full"
-                              value={otp}
-                              onChange={e => setOtp(e.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
-                            />
-                            {[0, 1, 2, 3, 4, 5].map(i => {
-                               const char = otp[i] || '';
-                               const isFilled = char.length > 0;
-                               return (
-                                 <div 
-                                   key={i}
-                                   className={`w-10 h-14 sm:w-14 sm:h-16 rounded-2xl flex items-center justify-center text-xl sm:text-2xl font-bold transition-all duration-150 ease-out ${isFilled ? 'neumorphic-sunk text-[#ff5c35] scale-95 translate-y-1' : 'neumorphic-raised text-transparent scale-100 translate-y-0'}`}
-                                 >
-                                   {char || '|'}
-                                 </div>
-                               )
-                            })}
-                          </div>
-                          
-                          <div className="flex w-full justify-between items-center mt-2 px-2">
-                             <button type="button" onClick={() => { setShowOtpInput(false); setOtp(''); }} className="text-[11px] text-zinc-500 hover:text-white transition-colors">Change Number</button>
-                             <div className="flex items-center gap-2">
-                               <RefreshCw className={`w-3.5 h-3.5 ${resendCountdown > 0 ? 'text-zinc-600' : 'text-[#ff5c35]'}`} />
-                               <button 
-                                 type="button" 
-                                 disabled={resendCountdown > 0}
-                                 onClick={e => handleSendOtp(e)} 
-                                 className={`text-[11px] transition-colors ${resendCountdown > 0 ? 'text-zinc-600 cursor-not-allowed' : 'text-zinc-300 hover:text-white'}`}
-                               >
-                                 Resend code
-                               </button>
-                               {resendCountdown > 0 && <span className="text-[11px] text-zinc-600 ml-1">available in {resendCountdown}s</span>}
-                             </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {isAuthMode === 'signup' && (
-                    <div className="flex gap-2 pt-2">
-                      <button
-                        type="button"
-                        onClick={() => setAuthForm({ ...authForm, role: 'attendee' })}
-                        className={`flex-1 py-2.5 rounded-xl text-xs font-semibold transition-colors border ${authForm.role === 'attendee' ? 'border-[#ff5c35] text-[#ff5c35] bg-[#ff5c35]/10' : 'border-zinc-800 text-zinc-500 hover:border-zinc-600'}`}
-                      >
-                        Participant
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAuthForm({ ...authForm, role: 'organizer' })}
-                        className={`flex-1 py-2.5 rounded-xl text-xs font-semibold transition-colors border ${authForm.role === 'organizer' ? 'border-[#ff5c35] text-[#ff5c35] bg-[#ff5c35]/10' : 'border-zinc-800 text-zinc-500 hover:border-zinc-600'}`}
-                      >
-                        Organizer
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Divider */}
-                  <div className="flex items-center justify-center my-8">
-                    <div className="h-[1px] bg-zinc-800 w-12"></div>
-                    <span className="px-4 text-zinc-600 text-xs">or</span>
-                    <div className="h-[1px] bg-zinc-800 w-12"></div>
-                  </div>
-
-                  {/* Social Login Button */}
-                  <button
-                    onClick={async () => {
-                      setAuthLoading(true);
-                      try {
-                        const role = isAuthMode === 'signup' ? authForm.role : 'attendee';
-                        const user = await loginWithGoogle(role as 'organizer' | 'attendee');
-                        if (user) { setCurrentUser(user); addToast('Welcome back!', 'success'); }
-                        else addToast('Google Sign In failed', 'error');
-                      } catch (e) { console.error(e); addToast('Something went wrong', 'error'); }
-                      finally { setAuthLoading(false); }
-                    }}
-                    className="w-full flex items-center justify-center gap-2 bg-transparent text-white py-3.5 rounded-xl font-medium border border-zinc-700/80 hover:bg-zinc-800/50 transition-colors text-sm"
-                  >
-                    <span>{isAuthMode === 'signup' ? 'Sign up' : 'Login'} with Google</span>
-                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5 ml-1" />
-                  </button>
-
-                  {/* Primary CTA */}
-                  <button
-                    type="button"
-                    disabled={authLoading || isSendingLoginOtp || isVerifyingLoginOtp}
-                    onClick={(e) => {
-                      if (isAuthMode === 'signup') handleSignup(e);
-                      else if (loginMethod === 'phone') showOtpInput ? handleVerifyOtp(e) : handleSendOtp(e);
-                      else handleLogin(e);
-                    }}
-                    className={`w-full py-4 rounded-xl transition-colors mt-6 text-xs tracking-widest font-bold uppercase disabled:opacity-50 flex justify-center items-center gap-2 ${showOtpInput ? 'neumorphic-button text-zinc-300 hover:text-white' : 'bg-[#ff5c35] hover:bg-[#e04d2a] text-white shadow-lg shadow-orange-900/20'}`}
-                  >
-                    {isSendingLoginOtp || isVerifyingLoginOtp || authLoading ? (
-                      <Loader2 className="w-5 h-5 animate-spin text-white" />
+                  <div className="text-center mb-6">
+                    {showOtpInput ? (
+                      <>
+                        <p className="text-[10px] font-bold text-zinc-500 tracking-[0.2em] uppercase mb-4">Component · 104</p>
+                        <h2 className="text-3xl font-bold text-white mb-2 tracking-tight">
+                          Verify code <span className="text-[#ff5c35]">Eventron</span>
+                        </h2>
+                        <p className="text-zinc-400 text-sm">Raised is empty. Sunk is filled.</p>
+                      </>
                     ) : (
-                      isAuthMode === 'signup' ? 'Sign Up' : (loginMethod === 'phone' ? (showOtpInput ? 'Verify Code' : 'Send Code') : 'Login')
+                      <>
+                        <h2 className="text-4xl font-bold text-white mb-3 tracking-tight">
+                          {isAuthMode === 'signin' ? 'Welcome Back' : isAuthMode === 'forgot-password' ? 'Reset Password' : 'Create Account'}
+                        </h2>
+                        <p className="text-zinc-400 text-sm">
+                          {isAuthMode === 'signin' ? 'Let’s make your next event unforgettable.' : isAuthMode === 'forgot-password' ? 'Enter your email to receive a reset link' : 'Join Eventron'}
+                        </p>
+                      </>
                     )}
-                  </button>
-
-                  {/* Toggle Mode */}
-                  <div className="text-center mt-6 text-xs text-zinc-500">
-                    {isAuthMode === 'signin' ? "Don't have an account? " : "Already have an account? "}
-                    <button
-                      onClick={() => setIsAuthMode(isAuthMode === 'signin' ? 'signup' : 'signin')}
-                      className="text-[#ff5c35] hover:text-[#e04d2a] font-medium transition-colors ml-1"
-                    >
-                      {isAuthMode === 'signin' ? 'Sign up' : 'Login'}
-                    </button>
                   </div>
-                  
-                  {isAuthMode === 'signin' && twilioStatus.isAvailable && (
-                      <div className="text-center mt-3">
-                         <button onClick={() => { setLoginMethod(loginMethod === 'email' ? 'phone' : 'email'); setShowOtpInput(false); }} className="text-[10px] text-zinc-600 hover:text-zinc-400">
-                             Use {loginMethod === 'email' ? 'Phone' : 'Email'} Instead
-                         </button>
-                      </div>
-                  )}
 
-                </div>
-              )}
+                  {/* Form Content */}
+                  {isAuthMode === 'forgot-password' ? (
+                    <form onSubmit={handlePasswordReset} className="space-y-4">
+                      <div className="relative">
+                        <input
+                          id="reset-email"
+                          type="email"
+                          required
+                          placeholder="Email"
+                          className="w-full px-5 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
+                          value={resetEmail}
+                          onChange={e => setResetEmail(e.target.value)}
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={authLoading}
+                        className="w-full bg-[#ff5c35] hover:bg-[#e04d2a] text-white font-medium py-3.5 rounded-full transition-colors mt-6 shadow-lg shadow-orange-900/20"
+                      >
+                        {authLoading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Send Reset Link'}
+                      </button>
+                      <div className="text-center mt-4">
+                        <button
+                          type="button"
+                          onClick={() => setIsAuthMode('signin')}
+                          className="text-zinc-500 text-xs hover:text-white transition-colors"
+                        >
+                          ← Back to Sign In
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div className="space-y-4">
+
+                      {isAuthMode === 'signup' && (
+                        <input
+                          type="text"
+                          required
+                          placeholder="Full Name"
+                          className="w-full px-5 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
+                          value={authForm.name}
+                          onChange={e => setAuthForm({ ...authForm, name: e.target.value })}
+                        />
+                      )}
+
+                      {(loginMethod === 'email' || isAuthMode === 'signup') ? (
+                        <>
+                          <input
+                            type="email"
+                            required
+                            placeholder="Email"
+                            className="w-full px-5 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
+                            value={authForm.email}
+                            onChange={e => setAuthForm({ ...authForm, email: e.target.value })}
+                          />
+                          <input
+                            type="password"
+                            required
+                            placeholder="Password"
+                            className="w-full px-5 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
+                            value={authForm.password}
+                            onChange={e => setAuthForm({ ...authForm, password: e.target.value })}
+                          />
+                          {isAuthMode === 'signin' && (
+                            <div className="text-right">
+                              <button
+                                type="button"
+                                onClick={() => setIsAuthMode('forgot-password')}
+                                className="text-xs text-[#ff5c35] hover:text-[#e04d2a] transition-colors font-medium mt-2"
+                              >
+                                Forgot password?
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div>
+                          {!showOtpInput ? (
+                            <div className="flex gap-2">
+                              <div className="relative w-28 shrink-0">
+                                <select
+                                  value={loginDialCode}
+                                  onChange={e => setLoginDialCode(e.target.value)}
+                                  className="w-full h-full px-3 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white text-xs font-medium outline-none appearance-none cursor-pointer pr-7"
+                                >
+                                  {COUNTRY_CODES.map(c => (
+                                    <option key={c.code} value={c.dialCode} className="bg-zinc-900 text-white py-1">
+                                      {c.dialCode}
+                                    </option>
+                                  ))}
+                                </select>
+                                <ChevronDown className="w-3 h-3 text-zinc-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                              </div>
+                              <input
+                                type="tel"
+                                inputMode="numeric"
+                                required
+                                placeholder="Phone Number"
+                                className="w-full px-4 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
+                                value={loginNationalNumber}
+                                onChange={e => setLoginNationalNumber(e.target.value.replace(/[^0-9\s-]/g, ''))}
+                              />
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center pt-0 w-full">
+                              {/* Lock Icon */}
+                              <div className="w-16 h-16 rounded-full neumorphic-raised flex items-center justify-center mb-4 text-[#ff5c35]">
+                                <Lock className="w-6 h-6" />
+                              </div>
+
+                              {/* Title */}
+                              <h3 className="text-xl font-semibold text-white mb-2">Verify your identity</h3>
+                              <p className="text-sm text-zinc-400 mb-6 text-center leading-relaxed">
+                                We sent a 6-digit code to<br />
+                                <span className="font-semibold text-white">{loginDialCode} {loginNationalNumber}</span>
+                              </p>
+
+                              {/* Custom OTP Input */}
+                              <div className="relative flex gap-2 sm:gap-4 justify-center mb-6 w-full">
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  pattern="[0-9]*"
+                                  maxLength={6}
+                                  className="absolute inset-0 opacity-0 z-10 cursor-text w-full h-full"
+                                  value={otp}
+                                  onChange={e => setOtp(e.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
+                                />
+                                {[0, 1, 2, 3, 4, 5].map(i => {
+                                  const char = otp[i] || '';
+                                  const isFilled = char.length > 0;
+                                  return (
+                                    <div
+                                      key={i}
+                                      className={`w-10 h-14 sm:w-14 sm:h-16 rounded-2xl flex items-center justify-center text-xl sm:text-2xl font-bold transition-all duration-150 ease-out ${isFilled ? 'neumorphic-sunk text-[#ff5c35] scale-95 translate-y-1' : 'neumorphic-raised text-transparent scale-100 translate-y-0'}`}
+                                    >
+                                      {char || '|'}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+
+                              <div className="flex w-full justify-between items-center mt-2 px-2">
+                                <button type="button" onClick={() => { setShowOtpInput(false); setOtp(''); }} className="text-[11px] text-zinc-500 hover:text-white transition-colors">Change Number</button>
+                                <div className="flex items-center gap-2">
+                                  <RefreshCw className={`w-3.5 h-3.5 ${resendCountdown > 0 ? 'text-zinc-600' : 'text-[#ff5c35]'}`} />
+                                  <button
+                                    type="button"
+                                    disabled={resendCountdown > 0}
+                                    onClick={e => handleSendOtp(e)}
+                                    className={`text-[11px] transition-colors ${resendCountdown > 0 ? 'text-zinc-600 cursor-not-allowed' : 'text-zinc-300 hover:text-white'}`}
+                                  >
+                                    Resend code
+                                  </button>
+                                  {resendCountdown > 0 && <span className="text-[11px] text-zinc-600 ml-1">available in {resendCountdown}s</span>}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {isAuthMode === 'signup' && (
+                        <div className="flex gap-2 pt-2">
+                          <button
+                            type="button"
+                            onClick={() => setAuthForm({ ...authForm, role: 'attendee' })}
+                            className={`flex-1 py-2.5 rounded-xl text-xs font-semibold transition-colors border ${authForm.role === 'attendee' ? 'border-[#ff5c35] text-[#ff5c35] bg-[#ff5c35]/10' : 'border-zinc-800 text-zinc-500 hover:border-zinc-600'}`}
+                          >
+                            Participant
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAuthForm({ ...authForm, role: 'organizer' })}
+                            className={`flex-1 py-2.5 rounded-xl text-xs font-semibold transition-colors border ${authForm.role === 'organizer' ? 'border-[#ff5c35] text-[#ff5c35] bg-[#ff5c35]/10' : 'border-zinc-800 text-zinc-500 hover:border-zinc-600'}`}
+                          >
+                            Organizer
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Divider */}
+                      <div className="flex items-center justify-center my-8">
+                        <div className="h-[1px] bg-zinc-800 w-12"></div>
+                        <span className="px-4 text-zinc-600 text-xs">or</span>
+                        <div className="h-[1px] bg-zinc-800 w-12"></div>
+                      </div>
+
+                      {/* Social Login Button */}
+                      <button
+                        onClick={async () => {
+                          setAuthLoading(true);
+                          try {
+                            const role = isAuthMode === 'signup' ? authForm.role : 'attendee';
+                            const user = await loginWithGoogle(role as 'organizer' | 'attendee');
+                            if (user) { setCurrentUser(user); addToast('Welcome back!', 'success'); }
+                            else addToast('Google Sign In failed', 'error');
+                          } catch (e) { console.error(e); addToast('Something went wrong', 'error'); }
+                          finally { setAuthLoading(false); }
+                        }}
+                        className="w-full flex items-center justify-center gap-2 bg-transparent text-white py-3.5 rounded-xl font-medium border border-zinc-700/80 hover:bg-zinc-800/50 transition-colors text-sm"
+                      >
+                        <span>{isAuthMode === 'signup' ? 'Sign up' : 'Login'} with Google</span>
+                        <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5 ml-1" />
+                      </button>
+
+                      {/* Primary CTA */}
+                      <button
+                        type="button"
+                        disabled={authLoading || isSendingLoginOtp || isVerifyingLoginOtp}
+                        onClick={(e) => {
+                          if (isAuthMode === 'signup') handleSignup(e);
+                          else if (loginMethod === 'phone') showOtpInput ? handleVerifyOtp(e) : handleSendOtp(e);
+                          else handleLogin(e);
+                        }}
+                        className={`w-full py-4 rounded-xl transition-colors mt-6 text-xs tracking-widest font-bold uppercase disabled:opacity-50 flex justify-center items-center gap-2 ${showOtpInput ? 'neumorphic-button text-zinc-300 hover:text-white' : 'bg-[#ff5c35] hover:bg-[#e04d2a] text-white shadow-lg shadow-orange-900/20'}`}
+                      >
+                        {isSendingLoginOtp || isVerifyingLoginOtp || authLoading ? (
+                          <Loader2 className="w-5 h-5 animate-spin text-white" />
+                        ) : (
+                          isAuthMode === 'signup' ? 'Sign Up' : (loginMethod === 'phone' ? (showOtpInput ? 'Verify Code' : 'Send Code') : 'Login')
+                        )}
+                      </button>
+
+                      {/* Toggle Mode */}
+                      <div className="text-center mt-6 text-xs text-zinc-500">
+                        {isAuthMode === 'signin' ? "Don't have an account? " : "Already have an account? "}
+                        <button
+                          onClick={() => setIsAuthMode(isAuthMode === 'signin' ? 'signup' : 'signin')}
+                          className="text-[#ff5c35] hover:text-[#e04d2a] font-medium transition-colors ml-1"
+                        >
+                          {isAuthMode === 'signin' ? 'Sign up' : 'Login'}
+                        </button>
+                      </div>
+
+                      {isAuthMode === 'signin' && (
+                        <div className="flex flex-col items-center mt-3 gap-3">
+                          {twilioStatus.isAvailable && (
+                            <button onClick={() => { setLoginMethod(loginMethod === 'email' ? 'phone' : 'email'); setShowOtpInput(false); }} className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors">
+                              Use {loginMethod === 'email' ? 'Phone' : 'Email'} Instead
+                            </button>
+                          )}
+                          <motion.button
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            onClick={() => { setIsAuthModalOpen(false); if (location.pathname === '/') navigate('/explore'); }}
+                            className="group relative px-5 py-2 rounded-full border border-zinc-700/50 hover:border-[#ff5c35]/50 bg-zinc-800/30 hover:bg-[#ff5c35]/10 transition-colors text-[10px] uppercase tracking-widest font-bold text-zinc-400 hover:text-[#ff5c35] flex items-center justify-center overflow-hidden"
+                          >
+                            <span className="relative z-10 flex items-center gap-2">
+                              Continue as Guest
+                              <svg className="w-3 h-3 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                              </svg>
+                            </span>
+                          </motion.button>
+                        </div>
+                      )}
+
+                    </div>
+                  )}
                 </motion.div>
               </AnimatePresence>
             </div>
@@ -2667,7 +2686,7 @@ export default function App() {
 
           <nav className="hidden lg:flex items-center gap-1 bg-white/5 p-1 rounded-2xl border border-white/5 relative">
             {[
-              { id: 'browse', label: 'Explore', show: currentUser?.role !== 'admin' },
+              { id: 'browse', label: 'Explore', show: currentUser ? currentUser.role !== 'admin' : false },
               { id: 'organizer', label: 'Dashboard', show: currentUser?.role === 'organizer' },
               { id: 'admin', label: 'Admin', show: currentUser?.role === 'admin' },
               { id: 'my-tickets', label: 'My Tickets', show: currentUser?.role === 'attendee' }
@@ -2690,12 +2709,14 @@ export default function App() {
           </nav>
 
           <div className="flex items-center gap-2 md:gap-4">
-            <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="lg:hidden p-3 rounded-xl bg-white/5 text-slate-400 hover:text-orange-400 transition-all border border-white/5"
-            >
-              {isMobileMenuOpen ? <X className="w-5 h-5" /> : <MoreHorizontal className="w-5 h-5" />}
-            </button>
+            {currentUser && (
+              <button
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                className="lg:hidden p-3 rounded-xl bg-white/5 text-slate-400 hover:text-orange-400 transition-all border border-white/5"
+              >
+                {isMobileMenuOpen ? <X className="w-5 h-5" /> : <MoreHorizontal className="w-5 h-5" />}
+              </button>
+            )}
 
             <AnimatePresence>
               {isMobileMenuOpen && (
@@ -2706,7 +2727,7 @@ export default function App() {
                   className="absolute top-[88px] left-4 right-4 liquid-glass rounded-3xl border border-white/10 p-4 z-50 lg:hidden flex flex-col gap-2 shadow-2xl"
                 >
                   {[
-                    { id: 'browse', label: 'Explore', icon: Sparkles, show: currentUser?.role !== 'admin' },
+                    { id: 'browse', label: 'Explore', icon: Sparkles, show: currentUser ? currentUser.role !== 'admin' : false },
                     { id: 'organizer', label: 'Dashboard', show: currentUser?.role === 'organizer', icon: Layout },
                     { id: 'admin', label: 'Admin', show: currentUser?.role === 'admin', icon: Shield },
                     { id: 'my-tickets', label: 'My Tickets', show: currentUser?.role === 'attendee', icon: QrCode }
@@ -2727,15 +2748,17 @@ export default function App() {
               )}
             </AnimatePresence>
             <div className="relative">
-              <button
-                onClick={() => setIsNotificationsOpen(!isNotificationsOpen)}
-                className={`p-3 rounded-xl transition-all relative ${isNotificationsOpen ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/30' : 'bg-white/5 text-slate-400 hover:text-orange-400 hover:bg-white/10'}`}
-              >
-                <Bell className="w-5 h-5" />
-                {notifications.filter(n => !n.read).length > 0 && (
-                  <span className="absolute top-2.5 right-2.5 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-slate-900 animate-pulse"></span>
-                )}
-              </button>
+              {currentUser && (
+                <button
+                  onClick={() => setIsNotificationsOpen(!isNotificationsOpen)}
+                  className={`p-3 rounded-xl transition-all relative ${isNotificationsOpen ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/30' : 'bg-white/5 text-slate-400 hover:text-orange-400 hover:bg-white/10'}`}
+                >
+                  <Bell className="w-5 h-5" />
+                  {notifications.filter(n => !n.read).length > 0 && (
+                    <span className="absolute top-2.5 right-2.5 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-slate-900 animate-pulse"></span>
+                  )}
+                </button>
+              )}
 
               {isNotificationsOpen && (
                 <>
@@ -2896,7 +2919,7 @@ export default function App() {
                 onClick={() => setIsAuthModalOpen(true)}
                 className="px-5 sm:px-8 py-3 bg-orange-600 text-white rounded-2xl text-xs sm:text-sm font-black font-outfit hover:bg-orange-700 transition-all shadow-xl shadow-orange-600/30 active:scale-95 uppercase tracking-wider"
               >
-                Sign In
+                Sign Up / Login
               </button>
             )}
           </div>
@@ -3107,50 +3130,7 @@ export default function App() {
 
     return (
       <div className="animate-in fade-in duration-700">
-        {/* Modern Premium Hero Section */}
-        {activeTab === 'browse' && !currentUser && (
-          <div className="relative overflow-hidden mb-8 sm:mb-16 pt-32 pb-20 md:pt-40 md:pb-32 transition-all">
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-orange-600/20 blur-[150px] rounded-full pointer-events-none -z-10 animate-pulse"></div>
-
-            <div className="max-w-5xl mx-auto text-center px-6 relative z-10">
-              <div className="inline-flex items-center gap-3 px-6 py-2.5 rounded-full liquid-glass text-orange-300 border-orange-500/20 text-[10px] sm:text-xs font-black uppercase tracking-[0.25em] mb-10 animate-float shadow-[0_0_30px_rgba(234,88,12,0.2)]">
-                <Sparkles className="w-3.5 h-3.5" />
-                Experience the Extraordinary
-              </div>
-
-              <h1 className="text-5xl sm:text-6xl md:text-8xl font-black font-outfit text-white mb-10 tracking-tighter leading-[1] md:leading-[0.9] drop-shadow-2xl">
-                Where Every Moment <br className="hidden sm:block" />
-                <span className="text-refraction relative inline-block">
-                  Becomes a Legacy
-                  <svg className="absolute w-full h-3 -bottom-1 left-0 text-orange-500 opacity-50" viewBox="0 0 200 9" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2.00025 6.99997C25.7509 9.37523 78.9113 9.00003 160.004 2.00001" stroke="currentColor" strokeWidth="3" strokeLinecap="round" /></svg>
-                </span>
-              </h1>
-
-              <p className="text-lg sm:text-2xl text-slate-300 mb-12 max-w-3xl mx-auto leading-relaxed font-medium drop-shadow-md">
-                Connect with the world's most exclusive tech, design, and cultural events. Your next core memory is just a click away.
-              </p>
-
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
-                <button
-                  onClick={() => setIsAuthModalOpen(true)}
-                  className="w-full sm:w-auto px-12 py-5 button-glow text-white rounded-[24px] text-sm md:text-lg font-black font-outfit uppercase tracking-[0.15em] hover:scale-105 active:scale-95 transition-all"
-                >
-                  Start Your Journey
-                </button>
-                <div className="flex items-center gap-3 text-slate-400 font-bold text-xs sm:text-sm bg-white/5 px-6 py-4 rounded-2xl border border-white/5 backdrop-blur-sm">
-                  <div className="flex -space-x-2">
-                    {[1, 2, 3].map(i => <div key={i} className={`w-6 h-6 rounded-full border-2 border-slate-900 bg-slate-700/50`}></div>)}
-                  </div>
-                  Join 10,000+ members
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-
-
-        <div className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-20 ${!currentUser ? '' : 'pt-32'}`}>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-20 pt-32">
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8 md:mb-12">
             <div>
               <div className="flex items-center gap-2 mb-2">
@@ -4034,7 +4014,17 @@ export default function App() {
 
       <main className="pt-6 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
         <Routes>
-          <Route path="/" element={<Navigate to="/explore" replace />} />
+          <Route path="/" element={
+            <div className="min-h-[80vh] flex flex-col items-center justify-center relative overflow-hidden rounded-[2rem] mt-6 border border-zinc-800">
+              <div className="absolute inset-0 bg-[url('/amadeus-moga-51lUmJT3g_Y-unsplash.jpg')] bg-cover bg-center opacity-30"></div>
+              <div className="absolute inset-0 bg-gradient-to-t from-[#16161a] via-[#16161a]/80 to-transparent"></div>
+              <div className="relative z-10 text-center px-4">
+                <h1 className="text-5xl md:text-6xl font-black text-white mb-6 tracking-tight">Welcome to <span className="text-[#ff5c35]">Eventron</span></h1>
+                <p className="text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto mb-10">Sign in to discover and manage unforgettable events.</p>
+                <button onClick={() => setIsAuthModalOpen(true)} className="px-8 py-4 bg-[#ff5c35] hover:bg-[#e04d2a] text-white rounded-full font-bold transition-all shadow-lg shadow-orange-900/20 text-sm uppercase tracking-widest">Sign In</button>
+              </div>
+            </div>
+          } />
           <Route path="/explore" element={renderEvents()} />
           <Route path="/myticket" element={currentUser ? renderMyTickets() : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Please sign in to view your tickets.</div>} />
           <Route path="/organizer" element={currentUser?.role === 'organizer' ? renderOrganizer() : <Navigate to="/explore" replace />} />
@@ -4240,11 +4230,10 @@ export default function App() {
                             setNewEvent({ ...newEvent, tags: [...tags, tag] });
                           }
                         }}
-                        className={`py-1.5 px-3 rounded-lg border text-xs font-medium transition-all ${
-                          (newEvent.tags || []).includes(tag)
-                            ? 'bg-orange-900/40 border-orange-500 text-orange-400 shadow-lg shadow-orange-900/20'
-                            : 'bg-slate-950 border-slate-700 text-slate-500 hover:border-slate-600'
-                        }`}
+                        className={`py-1.5 px-3 rounded-lg border text-xs font-medium transition-all ${(newEvent.tags || []).includes(tag)
+                          ? 'bg-orange-900/40 border-orange-500 text-orange-400 shadow-lg shadow-orange-900/20'
+                          : 'bg-slate-950 border-slate-700 text-slate-500 hover:border-slate-600'
+                          }`}
                       >
                         {tag}
                       </button>
@@ -5307,8 +5296,8 @@ export default function App() {
                               }));
                             }}
                             className={`w-full pl-4 pr-4 py-3 rounded-2xl bg-[#1e293b] border text-white font-mono font-medium outline-none transition-all ${profileForm.isPhoneVerified
-                                ? 'border-green-500/40 bg-green-950/20 text-green-200'
-                                : 'border-slate-700/60 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20'
+                              ? 'border-green-500/40 bg-green-950/20 text-green-200'
+                              : 'border-slate-700/60 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20'
                               } disabled:opacity-60 disabled:cursor-not-allowed`}
                           />
                         </div>
