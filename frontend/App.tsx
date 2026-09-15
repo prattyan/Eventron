@@ -699,7 +699,6 @@ export default function App() {
   useEffect(() => {
     if (
       isAuthModalOpen ||
-      !currentUser ||
       isCreateModalOpen ||
       isProfileModalOpen ||
       selectedEventForDetails ||
@@ -1235,6 +1234,7 @@ export default function App() {
     setCurrentUser(null); // Ensure immediate local state clear
     setAuthForm({ name: '', email: '', password: '', role: 'attendee' });
     addToast('Logged out successfully', 'info');
+    navigate('/');
   };
 
   // --- App Handlers ---
