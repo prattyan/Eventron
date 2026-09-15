@@ -257,6 +257,38 @@
     input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
       opacity: 1;
     }
+
+    /* --- Neumorphic UI Shadows --- */
+    .neumorphic-raised {
+      background: #1c1d25;
+      box-shadow: 
+        -4px -4px 10px rgba(255, 255, 255, 0.04), 
+        6px 6px 15px rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.03);
+    }
+
+    .neumorphic-sunk {
+      background: #17181e;
+      box-shadow: 
+        inset 4px 4px 8px rgba(0, 0, 0, 0.6), 
+        inset -2px -2px 6px rgba(255, 255, 255, 0.04),
+        0 0 0 1px rgba(255, 92, 53, 0.8);
+      border: 1px solid transparent;
+    }
+    
+    .neumorphic-button {
+      background: linear-gradient(145deg, #22242e, #1c1d25);
+      box-shadow: 
+        -4px -4px 10px rgba(255, 255, 255, 0.03), 
+        6px 6px 15px rgba(0, 0, 0, 0.4);
+      transition: all 0.2s ease;
+    }
+    
+    .neumorphic-button:active {
+      box-shadow: 
+        inset 4px 4px 8px rgba(0, 0, 0, 0.6), 
+        inset -2px -2px 6px rgba(255, 255, 255, 0.04);
+    }
   </style>
   <link rel="manifest" href="/manifest.json" />
   <meta name="theme-color" content="#d97757" />
