@@ -399,6 +399,7 @@ export default function App() {
   const [isAuthMode, setIsAuthMode] = useState<'signin' | 'signup' | 'forgot-password'>('signin');
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '', role: 'attendee' as Role });
   const [resetEmail, setResetEmail] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Phone Auth State
   const [loginMethod, setLoginMethod] = useState<'email' | 'phone'>('email');
@@ -602,6 +603,11 @@ export default function App() {
           setActiveTab('browse');
         }
         loadData();
+        // Close auth modal and navigate away from landing page on any successful auth
+        setIsAuthModalOpen(false);
+        if (window.location.pathname === '/' || window.location.pathname === '') {
+          navigate('/explore');
+        }
       } else {
         setEvents([]);
         setRegistrations([]);
@@ -1193,6 +1199,7 @@ export default function App() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAuthError(null);
     setAuthLoading(true);
     const user = await loginUser(authForm.email, authForm.password);
     setAuthLoading(false);
@@ -1201,14 +1208,17 @@ export default function App() {
       setCurrentUser(user);
       if (user.role === 'organizer') setActiveTab('organizer');
       else setActiveTab('browse');
+      setIsAuthModalOpen(false);
+      navigate('/explore');
       addToast(`Welcome back, ${user.name} !`, 'success');
     } else {
-      addToast('Invalid email or password', 'error');
+      setAuthError('Incorrect email or password. Please try again.');
     }
   };
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAuthError(null);
     setAuthLoading(true);
 
     const newUser = await registerUser({
@@ -1223,9 +1233,11 @@ export default function App() {
       setCurrentUser(newUser);
       if (newUser.role === 'organizer') setActiveTab('organizer');
       else setActiveTab('browse');
+      setIsAuthModalOpen(false);
+      navigate('/explore');
       addToast('Account created successfully!', 'success');
     } else {
-      addToast('Registration failed. Email might be in use.', 'error');
+      setAuthError('This email is already registered. Try signing in instead.');
     }
   };
 
@@ -2210,19 +2222,20 @@ export default function App() {
     if (e) e.preventDefault();
     const cleanNational = loginNationalNumber.replace(/[^0-9]/g, '');
     if (!cleanNational || cleanNational.length < 5) {
-      addToast('Please enter a valid phone number', 'error');
+      setAuthError('Please enter a valid phone number.');
       return;
     }
 
     const fullPhone = `${loginDialCode}${cleanNational}`;
     setPhoneNumber(fullPhone);
+    setAuthError(null);
 
     setIsSendingLoginOtp(true);
     try {
       if (isAuthMode === 'signin') {
         const userExists = await checkPhoneNumberExists(fullPhone);
         if (!userExists) {
-          addToast('User not found. No account is registered with this phone number.', 'error');
+          setAuthError('This mobile number is not registered. Please sign up first.');
           setIsSendingLoginOtp(false);
           return;
         }
@@ -2237,7 +2250,7 @@ export default function App() {
     } catch (error: any) {
       console.error(error);
       const errMsg = error.message || 'Failed to send OTP. Try again.';
-      addToast(errMsg, 'error');
+      setAuthError(errMsg);
     } finally {
       setIsSendingLoginOtp(false);
     }
@@ -2449,7 +2462,7 @@ export default function App() {
                             placeholder="Email"
                             className="w-full px-5 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
                             value={authForm.email}
-                            onChange={e => setAuthForm({ ...authForm, email: e.target.value })}
+                            onChange={e => { setAuthForm({ ...authForm, email: e.target.value }); setAuthError(null); }}
                           />
                           <input
                             type="password"
@@ -2457,7 +2470,7 @@ export default function App() {
                             placeholder="Password"
                             className="w-full px-5 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
                             value={authForm.password}
-                            onChange={e => setAuthForm({ ...authForm, password: e.target.value })}
+                            onChange={e => { setAuthForm({ ...authForm, password: e.target.value }); setAuthError(null); }}
                           />
                           {isAuthMode === 'signin' && (
                             <div className="text-right">
@@ -2496,7 +2509,7 @@ export default function App() {
                                 placeholder="Phone Number"
                                 className="w-full px-4 py-3.5 rounded-xl border border-zinc-700/80 bg-zinc-800/20 text-white focus:border-zinc-500 outline-none transition-colors placeholder:text-zinc-600 text-sm font-medium"
                                 value={loginNationalNumber}
-                                onChange={e => setLoginNationalNumber(e.target.value.replace(/[^0-9\s-]/g, ''))}
+                                onChange={e => { setLoginNationalNumber(e.target.value.replace(/[^0-9\s-]/g, '')); setAuthError(null); }}
                               />
                             </div>
                           ) : (
@@ -2558,6 +2571,14 @@ export default function App() {
                         </div>
                       )}
 
+                      {/* Inline Error Banner */}
+                      {authError && (
+                        <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/25 text-red-400 text-xs font-medium leading-snug">
+                          <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                          <span>{authError}</span>
+                        </div>
+                      )}
+
                       {isAuthMode === 'signup' && (
                         <div className="flex gap-2 pt-2">
                           <button
@@ -2591,8 +2612,12 @@ export default function App() {
                           try {
                             const role = isAuthMode === 'signup' ? authForm.role : 'attendee';
                             const user = await loginWithGoogle(role as 'organizer' | 'attendee');
-                            if (user) { setCurrentUser(user); addToast('Welcome back!', 'success'); }
-                            else addToast('Google Sign In failed', 'error');
+                            if (user) {
+                              setCurrentUser(user);
+                              setIsAuthModalOpen(false);
+                              navigate('/explore');
+                              addToast('Welcome back!', 'success');
+                            } else addToast('Google Sign In failed', 'error');
                           } catch (e) { console.error(e); addToast('Something went wrong', 'error'); }
                           finally { setAuthLoading(false); }
                         }}
@@ -2641,7 +2666,7 @@ export default function App() {
                           <motion.button
                             whileHover={{ scale: 1.05 }}
                             whileTap={{ scale: 0.95 }}
-                            onClick={() => { setIsAuthModalOpen(false); if (location.pathname === '/') navigate('/explore'); }}
+                            onClick={() => { setIsAuthModalOpen(false); navigate('/browse'); }}
                             className="group relative px-5 py-2 rounded-full border border-zinc-700/50 hover:border-[#ff5c35]/50 bg-zinc-800/30 hover:bg-[#ff5c35]/10 transition-colors text-[10px] uppercase tracking-widest font-bold text-zinc-400 hover:text-[#ff5c35] flex items-center justify-center overflow-hidden"
                           >
                             <span className="relative z-10 flex items-center gap-2">
@@ -4026,6 +4051,7 @@ export default function App() {
             </div>
           } />
           <Route path="/explore" element={renderEvents()} />
+          <Route path="/browse" element={renderEvents()} />
           <Route path="/myticket" element={currentUser ? renderMyTickets() : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Please sign in to view your tickets.</div>} />
           <Route path="/organizer" element={currentUser?.role === 'organizer' ? renderOrganizer() : <Navigate to="/explore" replace />} />
           <Route path="/admin" element={
