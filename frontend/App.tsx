@@ -467,6 +467,8 @@ export default function App() {
   const [showAllPastEvents, setShowAllPastEvents] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  // Real-time spots pulse: tracks event IDs that just received a new registration
+  const [flashedEventIds, setFlashedEventIds] = useState<Set<string>>(new Set());
 
   // Account Deletion Email Verification State
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -646,7 +648,12 @@ export default function App() {
           });
         }
       } else if (data.collection === 'registrations' || data.collection === 'teams') {
-        // Just reload data, don't show "spots left" toast to avoid requiring events/registrations in deps
+        // Pulse the spots badge for the affected event
+        if (data.action === 'insert' && data.document?.eventId) {
+          const eid = String(data.document.eventId);
+          setFlashedEventIds(prev => new Set(prev).add(eid));
+          setTimeout(() => setFlashedEventIds(prev => { const next = new Set(prev); next.delete(eid); return next; }), 3000);
+        }
         loadData(true);
       } else if (data.collection === 'messages') {
         const eventId = data.eventId || data.document?.eventId;
@@ -1299,6 +1306,76 @@ export default function App() {
     }
   };
 
+  // --- Payment Receipt PDF ---
+  const downloadPaymentReceipt = (details: {
+    userName: string; userEmail: string; eventTitle: string; eventDate: string;
+    eventLocation: string; amount: number; transactionId: string; orderId: string;
+    promoCode?: string; registrationId: string;
+  }) => {
+    const receiptHtml = `
+      <!DOCTYPE html><html><head><meta charset="UTF-8"/>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #020617; color: #f8fafc; padding: 40px; }
+        .receipt { max-width: 600px; margin: 0 auto; background: #0f172a; border-radius: 24px; overflow: hidden; border: 1px solid rgba(249,115,22,0.3); box-shadow: 0 0 60px rgba(249,115,22,0.1); }
+        .header { background: linear-gradient(135deg, #ea580c 0%, #c2410c 100%); padding: 36px 40px; display: flex; align-items: center; justify-content: space-between; }
+        .brand { font-size: 28px; font-weight: 900; color: white; letter-spacing: -0.5px; }
+        .brand span { opacity: 0.7; font-weight: 400; font-size: 13px; display: block; letter-spacing: 0.2em; text-transform: uppercase; margin-top: 2px; }
+        .receipt-tag { background: rgba(255,255,255,0.2); padding: 6px 16px; border-radius: 100px; font-size: 11px; font-weight: 700; color: white; text-transform: uppercase; letter-spacing: 0.15em; }
+        .body { padding: 40px; }
+        .success-badge { display: flex; align-items: center; gap: 10px; background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); border-radius: 12px; padding: 14px 20px; margin-bottom: 32px; }
+        .success-icon { width: 24px; height: 24px; background: #22c55e; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 14px; font-weight: 900; flex-shrink: 0; }
+        .success-text { color: #4ade80; font-weight: 700; font-size: 14px; }
+        .event-title { font-size: 22px; font-weight: 900; color: white; margin-bottom: 6px; }
+        .event-meta { color: #94a3b8; font-size: 13px; margin-bottom: 32px; }
+        .divider { height: 1px; background: rgba(255,255,255,0.06); margin: 24px 0; }
+        .row { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+        .label { color: #64748b; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; }
+        .value { color: #e2e8f0; font-size: 13px; font-weight: 600; text-align: right; max-width: 55%; word-break: break-all; }
+        .amount-row { background: rgba(249,115,22,0.08); border: 1px solid rgba(249,115,22,0.2); border-radius: 14px; padding: 18px 22px; margin-top: 24px; display: flex; justify-content: space-between; align-items: center; }
+        .amount-label { color: #fb923c; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
+        .amount-value { color: #f97316; font-size: 26px; font-weight: 900; }
+        .footer { background: rgba(0,0,0,0.3); padding: 20px 40px; text-align: center; color: #475569; font-size: 11px; border-top: 1px solid rgba(255,255,255,0.04); }
+        @media print { body { background: white; color: #0f172a; } .receipt { border: 2px solid #ea580c; box-shadow: none; } }
+      </style></head><body>
+      <div class="receipt">
+        <div class="header">
+          <div class="brand">Eventron<span>Payment Receipt</span></div>
+          <div class="receipt-tag">Confirmed</div>
+        </div>
+        <div class="body">
+          <div class="success-badge">
+            <div class="success-icon">✓</div>
+            <div class="success-text">Payment Successful — Your ticket is confirmed!</div>
+          </div>
+          <div class="event-title">${details.eventTitle}</div>
+          <div class="event-meta">${new Date(details.eventDate).toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} · ${details.eventLocation}</div>
+          <div class="divider"></div>
+          <div class="row"><span class="label">Attendee</span><span class="value">${details.userName}</span></div>
+          <div class="row"><span class="label">Email</span><span class="value">${details.userEmail}</span></div>
+          <div class="row"><span class="label">Registration ID</span><span class="value">#${details.registrationId.slice(-8).toUpperCase()}</span></div>
+          <div class="row"><span class="label">Transaction ID</span><span class="value">${details.transactionId}</span></div>
+          <div class="row"><span class="label">Order ID</span><span class="value">${details.orderId}</span></div>
+          ${details.promoCode ? `<div class="row"><span class="label">Promo Code</span><span class="value" style="color:#4ade80">${details.promoCode}</span></div>` : ''}
+          <div class="row"><span class="label">Date &amp; Time</span><span class="value">${new Date().toLocaleString('en-IN')}</span></div>
+          <div class="amount-row">
+            <div class="amount-label">Amount Paid</div>
+            <div class="amount-value">₹${details.amount.toLocaleString('en-IN')}</div>
+          </div>
+        </div>
+        <div class="footer">This is a system-generated receipt. Keep this for your records. · eventron.app</div>
+      </div>
+      <script>window.onload = function(){ window.print(); window.onafterprint = function(){ window.close(); } }<\/script>
+      </body></html>`;
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:0;height:0;border:none;';
+    document.body.appendChild(iframe);
+    iframe.contentWindow!.document.open();
+    iframe.contentWindow!.document.write(receiptHtml);
+    iframe.contentWindow!.document.close();
+    setTimeout(() => document.body.removeChild(iframe), 10000);
+  };
+
   const loadRazorpay = () => {
     return new Promise((resolve) => {
       const script = document.createElement('script');
@@ -1886,6 +1963,19 @@ export default function App() {
           addToast("Payment successful! Ticket confirmed.", "success");
           loadData();
           setIsPaymentModalOpen(false);
+          // Download PDF receipt
+          downloadPaymentReceipt({
+            userName: currentUser?.name || reg.participantName,
+            userEmail: currentUser?.email || reg.participantEmail,
+            eventTitle: event.title,
+            eventDate: event.date,
+            eventLocation: event.location,
+            amount,
+            transactionId: response.razorpay_payment_id || response.razorpay_order_id,
+            orderId: response.razorpay_order_id,
+            promoCode: paymentAppliedPromo?.code,
+            registrationId: reg.id,
+          });
         },
         prefill: {
           name: currentUser?.name || reg.participantName,
@@ -2318,7 +2408,7 @@ export default function App() {
   const handleVerifyOtp = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!otp) {
-      addToast('Please enter the OTP', 'error');
+      setAuthError('Please enter the OTP');
       return;
     }
 
@@ -2330,6 +2420,10 @@ export default function App() {
       const user = await verifyPhoneOtp(confirmationResult, otp, fullPhone);
       if (user) {
         setCurrentUser(user);
+        if (user.role === 'organizer') setActiveTab('organizer');
+        else setActiveTab('browse');
+        setIsAuthModalOpen(false);
+        navigate('/explore');
         addToast('Logged in successfully!', 'success');
         setAuthForm({ name: '', email: '', password: '', role: 'attendee' });
         setPhoneNumber('');
@@ -2337,16 +2431,18 @@ export default function App() {
         setOtp('');
         setShowOtpInput(false);
         setLoginMethod('email');
+        setAuthError(null);
       } else {
-        addToast('Verification failed', 'error');
+        setAuthError('Verification failed. Please try again.');
       }
     } catch (error: any) {
       console.error(error);
-      addToast(error.message || 'Invalid OTP', 'error');
+      setAuthError(error.message || 'Invalid OTP. Please check and try again.');
     } finally {
       setIsVerifyingLoginOtp(false);
     }
   };
+
 
 
   // --- Views ---
@@ -3021,8 +3117,17 @@ export default function App() {
 
             <div className="absolute bottom-4 left-4 z-10 flex gap-2">
               {!isCardClosed && (
-                <span className={`px-3 py-1 backdrop-blur-md rounded-lg text-[10px] font-bold border transition-colors ${remainingSpots === 0 ? 'bg-red-500/20 text-red-300 border-red-500/30' : remainingSpots <= 5 ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' : 'bg-white/10 text-white border-white/10 group-hover:bg-orange-600/50'}`}>
+                <span className={`px-3 py-1 backdrop-blur-md rounded-lg text-[10px] font-bold border transition-all duration-300 relative ${
+                  remainingSpots === 0
+                    ? 'bg-red-500/20 text-red-300 border-red-500/30'
+                    : remainingSpots <= 5
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                    : 'bg-white/10 text-white border-white/10 group-hover:bg-orange-600/50'
+                } ${flashedEventIds.has(event.id) ? 'animate-pulse ring-2 ring-orange-500/60 shadow-lg shadow-orange-500/30 scale-110' : ''}`}>
                   {remainingSpots === 0 ? 'Sold Out' : `${remainingSpots} Spots Left`}
+                  {flashedEventIds.has(event.id) && remainingSpots > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 w-2.5 h-2.5 bg-orange-500 rounded-full animate-ping" />
+                  )}
                 </span>
               )}
               {currentUser && (currentUser.role === 'admin' || currentUser.id === event.organizerId) && event.status && event.status !== EventStatus.APPROVED && (
