@@ -393,7 +393,16 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
   // Auth State
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    // Synchronously pre-load from localStorage so protected routes don't
+    // see null on the very first render and incorrectly redirect.
+    try {
+      const stored = localStorage.getItem('eh_current_user');
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
   const [authLoading, setAuthLoading] = useState(true);
   const [isScrolled, setIsScrolled] = useState(false); // Scroll state for header effect
   const [isAuthMode, setIsAuthMode] = useState<'signin' | 'signup' | 'forgot-password'>('signin');
@@ -2807,7 +2816,7 @@ export default function App() {
 
           <nav className="hidden lg:flex items-center gap-1 bg-white/5 p-1 rounded-2xl border border-white/5 relative">
             {[
-              { id: 'browse', label: 'Explore', show: currentUser ? currentUser.role !== 'admin' : false },
+              { id: 'browse', label: 'Explore', show: currentUser ? (currentUser.role !== 'admin' && currentUser.role !== 'organizer') : false },
               { id: 'organizer', label: 'Dashboard', show: currentUser?.role === 'organizer' },
               { id: 'admin', label: 'Admin', show: currentUser?.role === 'admin' },
               { id: 'my-tickets', label: 'My Tickets', show: currentUser?.role === 'attendee' }
@@ -2848,7 +2857,7 @@ export default function App() {
                   className="absolute top-[88px] left-4 right-4 liquid-glass rounded-3xl border border-white/10 p-4 z-50 lg:hidden flex flex-col gap-2 shadow-2xl"
                 >
                   {[
-                    { id: 'browse', label: 'Explore', icon: Sparkles, show: currentUser ? currentUser.role !== 'admin' : false },
+                    { id: 'browse', label: 'Explore', icon: Sparkles, show: currentUser ? (currentUser.role !== 'admin' && currentUser.role !== 'organizer') : false },
                     { id: 'organizer', label: 'Dashboard', show: currentUser?.role === 'organizer', icon: Layout },
                     { id: 'admin', label: 'Admin', show: currentUser?.role === 'admin', icon: Shield },
                     { id: 'my-tickets', label: 'My Tickets', show: currentUser?.role === 'attendee', icon: QrCode }
@@ -4155,10 +4164,10 @@ export default function App() {
               </div>
             </div>
           } />
-          <Route path="/explore" element={renderEvents()} />
+          <Route path="/explore" element={currentUser?.role === 'organizer' ? <Navigate to="/organizer" replace /> : renderEvents()} />
           <Route path="/browse" element={renderEvents()} />
           <Route path="/myticket" element={currentUser ? renderMyTickets() : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Please sign in to view your tickets.</div>} />
-          <Route path="/organizer" element={currentUser?.role === 'organizer' ? renderOrganizer() : <Navigate to="/explore" replace />} />
+          <Route path="/organizer" element={authLoading ? <div className="flex justify-center items-center py-40"><Loader2 className="w-10 h-10 animate-spin text-orange-500" /></div> : currentUser?.role === 'organizer' ? renderOrganizer() : <Navigate to="/explore" replace />} />
           <Route path="/admin" element={
             <Suspense fallback={<div className="flex justify-center p-20"><Loader2 className="animate-spin text-orange-500" /></div>}>
               {currentUser?.role === 'admin' ? <AdminDashboard currentUser={currentUser} onLogout={handleLogout} /> : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Access Restricted</div>}
