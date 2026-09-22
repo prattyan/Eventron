@@ -518,6 +518,36 @@ export default function App() {
     return end < now;
   };
 
+  // Infer suitable tags from event metadata using keyword matching
+  const inferEventTags = (e: AppEvent): string[] => {
+    if (e.tags && e.tags.length > 0) return e.tags; // Use organizer-set tags if available
+    const text = `${e.title} ${e.description}`.toLowerCase();
+    const rules: { keywords: string[]; tag: string }[] = [
+      { keywords: ['artificial intelligence', ' ai ', 'ai-', 'ai,', 'gpt', 'llm', 'generative', 'openai', 'chatbot'], tag: 'AI' },
+      { keywords: ['machine learning', ' ml ', 'deep learning', 'neural', 'model training', 'data science'], tag: 'ML' },
+      { keywords: ['conference', 'summit', 'symposium', 'congress', 'expo', 'convention'], tag: 'Conference' },
+      { keywords: ['tech', 'technology', 'software', 'developer', 'engineering', 'coding', 'programming', 'code', 'devops', 'cloud', 'web dev'], tag: 'Tech' },
+      { keywords: ['hackathon', 'hack', 'build sprint', 'buildathon', 'codefest', 'code fest'], tag: 'Hackathon' },
+      { keywords: ['networking', 'meet', 'mixer', 'connect', 'community', 'professionals', 'meetup'], tag: 'Networking' },
+      { keywords: ['startup', 'entrepreneur', 'pitch', 'venture', 'founder', 'bootstrapp', 'investor'], tag: 'Startup' },
+      { keywords: ['workshop', 'training', 'bootcamp', 'hands-on', 'hands on', 'tutorial', 'masterclass', 'course', 'session'], tag: 'Workshop' },
+      { keywords: ['design', 'ux', 'ui', 'figma', 'product design', 'creative', 'branding', 'typography'], tag: 'Design' },
+    ];
+    const inferred: string[] = [];
+    for (const rule of rules) {
+      if (rule.keywords.some(kw => text.includes(kw))) {
+        inferred.push(rule.tag);
+      }
+    }
+    // Fallback based on event properties
+    if (inferred.length === 0) {
+      if (e.participationMode === 'team') inferred.push('Hackathon');
+      else if (e.locationType === 'online') inferred.push('Tech');
+      else inferred.push('Networking');
+    }
+    return inferred.slice(0, 3); // Max 3 auto-tags
+  };
+
   // Modals
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -3083,8 +3113,14 @@ export default function App() {
     });
 
     const now = new Date();
+    const isLiveEvent = (e: AppEvent) => {
+      const start = new Date(e.date);
+      const end = e.endDate ? new Date(e.endDate) : new Date(start.getTime() + 3600000);
+      return now >= start && now <= end;
+    };
+
     const upcomingEvents = visibleEvents
-      .filter(e => !isPastEvent(e))
+      .filter(e => !isPastEvent(e) && !isLiveEvent(e))
       .sort((a, b) => {
         const aIsRec = recommendedEvents.some(rec => rec.id === a.id);
         const bIsRec = recommendedEvents.some(rec => rec.id === b.id);
@@ -3165,7 +3201,32 @@ export default function App() {
               {renderLocation(event.location, event.locationType, "truncate max-w-[200px]")}
             </div>
 
-            <p className="text-slate-400 text-sm line-clamp-2 mb-8 flex-1 leading-relaxed opacity-70 group-hover:opacity-100 transition-opacity">{event.description}</p>
+            <p className="text-slate-400 text-sm line-clamp-2 mb-4 flex-1 leading-relaxed opacity-70 group-hover:opacity-100 transition-opacity">{event.description}</p>
+
+            {/* Auto-inferred / organizer tags */}
+            {(() => {
+              const displayTags = inferEventTags(event);
+              const isAutoInferred = !event.tags || event.tags.length === 0;
+              return displayTags.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5 mb-6">
+                  {displayTags.map(tag => (
+                    <span
+                      key={tag}
+                      onClick={(ev) => { ev.stopPropagation(); setSelectedTag(selectedTag === tag ? null : tag); }}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-wide cursor-pointer transition-all border ${
+                        selectedTag === tag
+                          ? 'bg-orange-600 text-white border-orange-500 shadow-lg shadow-orange-600/20'
+                          : isAutoInferred
+                          ? 'bg-slate-800/60 text-slate-400 border-slate-700/60 hover:border-orange-500/40 hover:text-orange-400'
+                          : 'bg-orange-500/10 text-orange-400 border-orange-500/20 hover:bg-orange-500/20'
+                      }`}
+                    >
+                      {isAutoInferred && <span className="opacity-50 mr-0.5">#</span>}{tag}
+                    </span>
+                  ))}
+                </div>
+              ) : null;
+            })()}
 
             {(!currentUser || currentUser.role === 'attendee') && (
               (() => {
