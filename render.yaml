@@ -20,7 +20,7 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-      - key: VITE_GEMINI_API_KEY
+      - key: GROQ_API_KEY
         sync: false
       - key: FIREBASE_API_KEY
         sync: false

@@ -318,13 +318,11 @@ const EventChatBot: React.FC<EventChatBotProps> = ({ events, currentUserId }) =>
                                 <div className="flex-1">
                                     <p className="font-semibold text-rose-200">
                                         {statusState.reason === 'missing_key'
-                                            ? 'Gemini API Not Configured'
-                                            : statusState.reason === 'suspended_account'
-                                                ? 'Gemini API Inactive / Suspended'
-                                                : 'Gemini API Offline'}
+                                            ? 'AI Assistant Not Configured'
+                                            : 'AI Assistant Offline'}
                                     </p>
                                     <p className="text-[11px] text-rose-300/80 leading-snug mt-0.5">
-                                        {statusState.errorMessage || 'The configured API key is not active. Please check your .env file.'}
+                                        {statusState.errorMessage || 'AI service is currently unavailable.'}
                                     </p>
                                 </div>
                             </div>

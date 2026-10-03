@@ -55,6 +55,7 @@ from config import (
     RAZORPAY_KEY_ID,
     RAZORPAY_KEY_SECRET,
     GEMINI_API_KEY,
+    GROQ_API_KEY,
     TWILIO_ACCOUNT_SID,
     TWILIO_AUTH_TOKEN,
     TWILIO_VERIFY_SERVICE_SID,
@@ -79,6 +80,13 @@ import numpy as np
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
+    print("✅ Gemini API Key: Configured")
+
+if GROQ_API_KEY:
+    print("✅ Groq API Key: Configured (fallback ready)")
+
+if not GEMINI_API_KEY and not GROQ_API_KEY:
+    print("⚠️  No AI API keys configured (GEMINI_API_KEY / GROQ_API_KEY)")
 
 twilio_client = None
 if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
@@ -175,6 +183,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="EventHorizon API", lifespan=lifespan)
 
+from ai_routes import router as ai_router
+app.include_router(ai_router)
+
 
 app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(
@@ -203,22 +214,86 @@ def _serialise(obj: Any) -> Any:
     return obj
 
 
-async def get_embedding(text: str) -> list[float]:
-    """Generates embedding using Gemini API."""
-    if not GEMINI_API_KEY:
-        return []
-    for model_name in ["models/gemini-embedding-001", "models/gemini-embedding-2", "models/text-embedding-004"]:
-        try:
-            result = await asyncio.to_thread(
-                genai.embed_content,
-                model=model_name,
-                content=text
+async def _groq_embedding_fallback(text: str) -> list[float]:
+    """Uses Groq LLM to generate a pseudo-embedding via the chat API.
+    Falls back to a deterministic hash-based embedding if Groq also fails."""
+    if not GROQ_API_KEY:
+        return _hash_embedding(text)
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "allam-2-7b",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are an embedding generator. Given input text, output ONLY a JSON array of exactly 64 floating-point numbers "
+                                "between -1 and 1 that represent the semantic meaning of the text. No explanation, no markdown, just the JSON array."
+                            ),
+                        },
+                        {"role": "user", "content": text[:500]},
+                    ],
+                    "max_tokens": 600,
+                    "temperature": 0.0,
+                },
             )
-            if result and "embedding" in result:
-                return result["embedding"]
-        except Exception:
-            continue
-    return []
+            resp.raise_for_status()
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"].strip()
+            # Parse the JSON array from the response
+            content = content.replace("```json", "").replace("```", "").strip()
+            embedding = json.loads(content)
+            if isinstance(embedding, list) and len(embedding) >= 16:
+                return [float(x) for x in embedding]
+    except Exception as e:
+        print(f"⚠️ Groq embedding fallback failed: {e}")
+
+    return _hash_embedding(text)
+
+
+def _hash_embedding(text: str, dim: int = 64) -> list[float]:
+    """Generates a simple deterministic hash-based embedding as last-resort fallback.
+    Not semantically meaningful, but consistent for the same input."""
+    import hashlib
+    words = text.lower().split()
+    vec = [0.0] * dim
+    for i, word in enumerate(words):
+        h = int(hashlib.md5(word.encode()).hexdigest(), 16)
+        for d in range(dim):
+            bit = (h >> d) & 1
+            vec[d] += (1.0 if bit else -1.0) / max(len(words), 1)
+    # Normalize
+    norm = sum(x * x for x in vec) ** 0.5
+    if norm > 0:
+        vec = [x / norm for x in vec]
+    return vec
+
+
+async def get_embedding(text: str) -> list[float]:
+    """Generates embedding using Gemini API, with Groq and hash-based fallbacks."""
+    # Try Gemini first
+    if GEMINI_API_KEY:
+        for model_name in ["models/gemini-embedding-001", "models/gemini-embedding-2", "models/text-embedding-004"]:
+            try:
+                result = await asyncio.to_thread(
+                    genai.embed_content,
+                    model=model_name,
+                    content=text
+                )
+                if result and "embedding" in result:
+                    return result["embedding"]
+            except Exception:
+                continue
+
+    # Gemini failed or unconfigured — try Groq fallback
+    return await _groq_embedding_fallback(text)
 
 def cosine_similarity(vec_a, vec_b):
     """Calculates cosine similarity between two vectors."""

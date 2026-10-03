@@ -23,6 +23,7 @@ FINAL_ENCRYPTION_KEY: str = ENCRYPTION_KEY or "EventHorizon2026SecureKey32Bytes"
 
 
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 
 
 RAZORPAY_KEY_ID: str = os.getenv("RAZORPAY_KEY_ID", "rzp_test_YourKeyIdPlaceholder")

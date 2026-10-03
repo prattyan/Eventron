@@ -34,6 +34,7 @@ const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
 const TermsPage = lazy(() => import('./components/TermsPage'));
 const PrivacyPage = lazy(() => import('./components/PrivacyPage'));
 const RefundPage = lazy(() => import('./components/RefundPage'));
+import CaptchaWidget from './components/CaptchaWidget';
 
 // --- Sub-Components ---
 
@@ -409,6 +410,8 @@ export default function App() {
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '', role: 'attendee' as Role });
   const [resetEmail, setResetEmail] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [captchaVerified, setCaptchaVerified] = useState(false);
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
 
   // Phone Auth State
   const [loginMethod, setLoginMethod] = useState<'email' | 'phone'>('email');
@@ -456,6 +459,12 @@ export default function App() {
       setActiveTab('admin');
     }
   }, [location.pathname]);
+
+  // Reset CAPTCHA whenever the user switches auth mode
+  useEffect(() => {
+    setCaptchaVerified(false);
+    setCaptchaResetKey(k => k + 1);
+  }, [isAuthMode]);
 
   const handleTabChange = (tab: string) => {
     if (tab === 'browse') navigate('/explore');
@@ -1246,6 +1255,12 @@ export default function App() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
+
+    if (!captchaVerified) {
+      setAuthError('Please complete the human verification before signing in.');
+      return;
+    }
+
     setAuthLoading(true);
     const user = await loginUser(authForm.email, authForm.password);
     setAuthLoading(false);
@@ -1255,16 +1270,25 @@ export default function App() {
       if (user.role === 'organizer') setActiveTab('organizer');
       else setActiveTab('browse');
       setIsAuthModalOpen(false);
+      setCaptchaVerified(false);
       navigate('/explore');
       addToast(`Welcome back, ${user.name} !`, 'success');
     } else {
       setAuthError('Incorrect email or password. Please try again.');
+      setCaptchaVerified(false);
+      setCaptchaResetKey(k => k + 1);
     }
   };
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
+
+    if (!captchaVerified) {
+      setAuthError('Please complete the human verification before signing up.');
+      return;
+    }
+
     setAuthLoading(true);
 
     const newUser = await registerUser({
@@ -1280,10 +1304,13 @@ export default function App() {
       if (newUser.role === 'organizer') setActiveTab('organizer');
       else setActiveTab('browse');
       setIsAuthModalOpen(false);
+      setCaptchaVerified(false);
       navigate('/explore');
       addToast('Account created successfully!', 'success');
     } else {
       setAuthError('This email is already registered. Try signing in instead.');
+      setCaptchaVerified(false);
+      setCaptchaResetKey(k => k + 1);
     }
   };
 
@@ -2712,6 +2739,14 @@ export default function App() {
                           <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
                           <span>{authError}</span>
                         </div>
+                      )}
+
+                      {/* CAPTCHA — only for email/password flows */}
+                      {(loginMethod === 'email' || isAuthMode === 'signup') && (
+                        <CaptchaWidget
+                          onVerify={setCaptchaVerified}
+                          resetKey={captchaResetKey}
+                        />
                       )}
 
                       {isAuthMode === 'signup' && (

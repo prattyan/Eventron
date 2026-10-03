@@ -78,12 +78,17 @@ async def connect_db() -> None:
     print("----------------------------------------")
     print("Initializing Event Server (Python/FastAPI)...")
 
-    from config import GEMINI_API_KEY
+    from config import GEMINI_API_KEY, GROQ_API_KEY
 
     if GEMINI_API_KEY and len(GEMINI_API_KEY) > 20:
         print("✅ Gemini API Key: Found (Configured)")
     else:
         print("❌ Gemini API Key: MISSING or INVALID (Check .env)")
+
+    if GROQ_API_KEY and len(GROQ_API_KEY) > 10:
+        print("✅ Groq API Key: Found (Fallback Ready)")
+    else:
+        print("⚠️  Groq API Key: Not configured (no AI fallback)")
 
     try:
         client = get_client()
