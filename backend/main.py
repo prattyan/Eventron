@@ -458,6 +458,14 @@ async def get_event_poster(event_id: str):
 
 
 
+@app.get("/api/debug-cashfree")
+async def debug_cashfree():
+    return {
+        "env": CASHFREE_ENV,
+        "app_id": CASHFREE_APP_ID[:5] + "..." if CASHFREE_APP_ID else None,
+        "secret_len": len(CASHFREE_SECRET_KEY) if CASHFREE_SECRET_KEY else 0
+    }
+
 @app.post("/api/create-payment-order")
 async def create_payment_order(request: Request):
     try:
@@ -467,7 +475,7 @@ async def create_payment_order(request: Request):
         receipt = body.get("receipt", f"order_{uuid.uuid4().hex[:10]}")
         notes = body.get("notes", {})
 
-        url = "https://sandbox.cashfree.com/pg/orders" if CASHFREE_ENV == "SANDBOX" else "https://api.cashfree.com/pg/orders"
+        url = "https://api.cashfree.com/pg/orders"
         
         payload = {
             "order_amount": amount,
@@ -1502,4 +1510,6 @@ if __name__ == "__main__":
         reload_dirs=[_BACKEND_DIR],
         log_level="info",
     )
+
+# Force Uvicorn Reload for .env update
 

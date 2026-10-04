@@ -10,7 +10,9 @@ export interface GeminiStatusState {
   activeProvider: AIProvider;
 }
 
-const baseUrl = import.meta.env.PROD ? '' : 'http://127.0.0.1:5005';
+import { Capacitor } from '@capacitor/core';
+const API_BASE = Capacitor.isNativePlatform() ? 'https://eventron.xyz' : '';
+const baseUrl = import.meta.env.PROD ? API_BASE : 'http://127.0.0.1:5005';
 
 let currentStatus: GeminiStatusState = {
   isConfigured: false,

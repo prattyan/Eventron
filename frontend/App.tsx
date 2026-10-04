@@ -23,6 +23,9 @@ import {
 import { generateEventDescription, getEventRecommendations } from './services/geminiService';
 import { sendStatusUpdateEmail, sendReminderEmail, subscribeToPush } from './services/notificationService';
 import { socketService } from './services/socketService';
+import { Capacitor } from '@capacitor/core';
+
+const API_BASE = Capacitor.isNativePlatform() ? 'https://eventron.xyz' : '';
 
 // Lazy load heavy components for better initial load time
 const Scanner = lazy(() => import('./components/Scanner'));
@@ -1953,7 +1956,7 @@ export default function App() {
       }
 
       // Create Order
-      const baseUrl = import.meta.env.VITE_API_URL || '';
+      const baseUrl = API_BASE;
       const orderRes = await fetch(`${baseUrl}/api/create-payment-order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1976,8 +1979,8 @@ export default function App() {
         return;
       }
 
-      const cashfree = await (window as any).Cashfree({ mode: "sandbox" }); 
-      // NOTE: mode should ideally be derived from an env variable like import.meta.env.VITE_CASHFREE_ENV || "sandbox"
+      const cashfreeMode = (import.meta.env.VITE_CASHFREE_ENV || 'SANDBOX').toLowerCase();
+      const cashfree = await (window as any).Cashfree({ mode: cashfreeMode }); 
       
       cashfree.checkout({
         paymentSessionId: orderData.payment_session_id,
@@ -1991,7 +1994,7 @@ export default function App() {
         if (result.paymentDetails) {
           // Verify payment & increment promo usage on backend
           try {
-            const baseUrl = import.meta.env.VITE_API_URL || '';
+            const baseUrl = API_BASE;
             const verifyRes = await fetch(`${baseUrl}/api/verify-payment`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -5206,7 +5209,7 @@ export default function App() {
                         try {
                           setPaymentPromoMessage(null);
                           addToast('Verifying code...', 'info');
-                          const baseUrl = import.meta.env.VITE_API_URL || '';
+                          const baseUrl = API_BASE;
                           const res = await fetch(`${baseUrl}/api/verify-promo`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },

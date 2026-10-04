@@ -1,6 +1,7 @@
 import { RegistrationStatus } from '../types';
+import { Capacitor } from '@capacitor/core';
 
-// In a real application, this would call a backend endpoint or a service like EmailJS / SendGrid.
+const API_BASE = Capacitor.isNativePlatform() ? 'https://eventron.xyz' : '';
 // For this demo, we simulate the network delay and log the email content.
 
 interface EmailPayload {
@@ -102,7 +103,7 @@ The Eventron Team`;
   // 2. Try to Send Push Notification (if active)
   if (userId) {
     try {
-      await fetch('/api/send-push', {
+      await fetch(`${API_BASE}/api/send-push`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -166,7 +167,7 @@ export const subscribeToPush = async (userId: string) => {
       });
     }
 
-    await fetch('/api/subscribe', {
+    await fetch(`${API_BASE}/api/subscribe`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

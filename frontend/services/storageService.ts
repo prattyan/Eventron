@@ -19,8 +19,12 @@ import { Event, Registration, RegistrationStatus, EventStatus, User, Team, Parti
 import { STORAGE_KEYS } from '../constants';
 import { saveToCache, getFromCache, enqueueSyncAction, isOnline, getSyncQueue, removeSyncAction, initOfflineDB } from './offlineSyncService';
 
+import { Capacitor } from '@capacitor/core';
+
+const API_BASE = Capacitor.isNativePlatform() ? 'https://eventron.xyz' : '';
+
 const MONGO_CONFIG = {
-  endpoint: '/api/action',
+  endpoint: `${API_BASE}/api/action`,
   apiKey: 'dummy',
   dataSource: 'Cluster0',
   database: 'event_horizon',
@@ -181,7 +185,7 @@ if (typeof window !== 'undefined') {
 export const getVectorRecommendations = async (userId: string): Promise<Event[]> => {
   if (!USE_MONGO) return [];
   try {
-    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const baseUrl = API_BASE;
     const response = await fetch(`${baseUrl}/api/recommendations`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -329,7 +333,7 @@ export const getEvents = async (): Promise<Event[]> => {
 export const getEventImage = async (id: string): Promise<string | null> => {
   if (USE_MONGO) {
     // We now use the dedicated high-speed binary endpoint which is cached on the server
-    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const baseUrl = API_BASE;
     return `${baseUrl}/api/event-image/${id}?t=${Date.now()}`;
   }
   return null;
@@ -1195,7 +1199,7 @@ export interface TwilioAuthStatus {
 
 export const getTwilioAuthStatus = async (): Promise<TwilioAuthStatus> => {
   try {
-    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const baseUrl = API_BASE;
     const response = await fetch(`${baseUrl}/api/auth/twilio/status`);
     if (!response.ok) {
       return {
@@ -1218,7 +1222,7 @@ export const getTwilioAuthStatus = async (): Promise<TwilioAuthStatus> => {
 
 export const sendTwilioOtp = async (phoneNumber: string, channel: 'sms' | 'whatsapp' = 'sms'): Promise<{ success: boolean; status?: string; message?: string; channel?: string }> => {
   try {
-    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const baseUrl = API_BASE;
     const response = await fetch(`${baseUrl}/api/auth/twilio/send-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1239,7 +1243,7 @@ export const sendTwilioOtp = async (phoneNumber: string, channel: 'sms' | 'whats
 
 export const verifyTwilioOtp = async (phoneNumber: string, otp: string): Promise<User | null> => {
   try {
-    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const baseUrl = API_BASE;
     const response = await fetch(`${baseUrl}/api/auth/twilio/verify-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1518,7 +1522,7 @@ export const addNotification = async (notification: Omit<any, 'id'>): Promise<vo
 
   // Trigger Push Notification
   try {
-    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const baseUrl = API_BASE;
     fetch(`${baseUrl}/api/send-push`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1742,7 +1746,7 @@ export const addReview = async (review: Omit<any, 'id'>): Promise<void> => {
 
 export const sendEmailDeleteOtp = async (email: string, userId: string): Promise<{ success: boolean; message: string; dev_otp?: string }> => {
   try {
-    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const baseUrl = API_BASE;
     const response = await fetch(`${baseUrl}/api/auth/email/send-delete-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1767,7 +1771,7 @@ export const verifyEmailDeleteOtp = async (
   isOrganizer: boolean
 ): Promise<{ success: boolean; message: string }> => {
   try {
-    const baseUrl = import.meta.env.VITE_API_URL || '';
+    const baseUrl = API_BASE;
     const response = await fetch(`${baseUrl}/api/auth/email/verify-delete-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

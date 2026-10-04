@@ -10,7 +10,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"), override=True)
 
 
 MONGODB_URI: str = os.getenv("MONGODB_URI", "") or os.getenv("MONGO_URI", "")
@@ -26,10 +26,9 @@ GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 
 
-CASHFREE_APP_ID: str = os.getenv("CASHFREE_APP_ID", "")
-CASHFREE_SECRET_KEY: str = os.getenv("CASHFREE_SECRET_KEY", "")
-CASHFREE_ENV: str = os.getenv("CASHFREE_ENV", "SANDBOX") # SANDBOX or PRODUCTION
-
+CASHFREE_APP_ID: str = os.getenv("CASHFREE_APP_ID", "").strip()
+CASHFREE_SECRET_KEY: str = os.getenv("CASHFREE_SECRET_KEY", "").strip()
+CASHFREE_ENV: str = os.getenv("CASHFREE_ENV", "SANDBOX").strip() # SANDBOX or PRODUCTION
     
 PORT: int = int(os.getenv("PORT", "5005"))
 
