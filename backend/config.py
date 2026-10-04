@@ -26,8 +26,9 @@ GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 
 
-RAZORPAY_KEY_ID: str = os.getenv("RAZORPAY_KEY_ID", "rzp_test_YourKeyIdPlaceholder")
-RAZORPAY_KEY_SECRET: str = os.getenv("RAZORPAY_KEY_SECRET", "YourKeySecretPlaceholder")
+CASHFREE_APP_ID: str = os.getenv("CASHFREE_APP_ID", "")
+CASHFREE_SECRET_KEY: str = os.getenv("CASHFREE_SECRET_KEY", "")
+CASHFREE_ENV: str = os.getenv("CASHFREE_ENV", "SANDBOX") # SANDBOX or PRODUCTION
 
     
 PORT: int = int(os.getenv("PORT", "5005"))

@@ -32,8 +32,6 @@ from contextlib import asynccontextmanager
 from functools import partial
 from typing import Any
 import httpx
-
-import razorpay
 import socketio
 import uvicorn
 from fastapi import FastAPI, Request, Response
@@ -52,8 +50,9 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from config import (
     PORT,
-    RAZORPAY_KEY_ID,
-    RAZORPAY_KEY_SECRET,
+    CASHFREE_APP_ID,
+    CASHFREE_SECRET_KEY,
+    CASHFREE_ENV,
     GEMINI_API_KEY,
     GROQ_API_KEY,
     TWILIO_ACCOUNT_SID,
@@ -200,7 +199,6 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(SlowRequestLoggerMiddleware)
 
 
-razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
 def _serialise(obj: Any) -> Any:
     from bson import ObjectId
@@ -464,20 +462,50 @@ async def get_event_poster(event_id: str):
 async def create_payment_order(request: Request):
     try:
         body = await request.json()
-        amount = body.get("amount", 0)
+        amount = float(body.get("amount", 0))
         currency = body.get("currency", "INR")
-        receipt = body.get("receipt")
-        notes = body.get("notes")
+        receipt = body.get("receipt", f"order_{uuid.uuid4().hex[:10]}")
+        notes = body.get("notes", {})
 
-        order = razorpay_client.order.create({  # type: ignore[attr-defined]
-            "amount": int(amount * 100),
-            "currency": currency,
-            "receipt": receipt,
-            "notes": notes or {},
-        })
-        return {"success": True, "order": _serialise(order)}
+        url = "https://sandbox.cashfree.com/pg/orders" if CASHFREE_ENV == "SANDBOX" else "https://api.cashfree.com/pg/orders"
+        
+        payload = {
+            "order_amount": amount,
+            "order_currency": currency,
+            "order_id": receipt,
+            "customer_details": {
+                "customer_id": f"cust_{uuid.uuid4().hex[:8]}",
+                "customer_phone": notes.get("phone", "9999999999") if isinstance(notes, dict) else "9999999999",
+                "customer_email": notes.get("email", "abc@example.com") if isinstance(notes, dict) else "abc@example.com"
+            },
+            "order_meta": {
+                "return_url": "https://eventron.xyz/myticket" # Can be updated if needed
+            }
+        }
+        
+        headers = {
+            "accept": "application/json",
+            "x-client-id": CASHFREE_APP_ID,
+            "x-client-secret": CASHFREE_SECRET_KEY,
+            "x-api-version": "2023-08-01",
+            "content-type": "application/json"
+        }
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code == 200:
+                order_data = resp.json()
+                return {"success": True, "payment_session_id": order_data.get("payment_session_id"), "order_id": receipt, "order": order_data}
+            else:
+                print(f"Cashfree Order Error: {resp.text}")
+                return Response(
+                    content=json.dumps({"success": False, "error": resp.text}),
+                    status_code=500,
+                    media_type="application/json",
+                )
+
     except Exception as e:
-        print(f"Razorpay Order Error: {e}")
+        print(f"Cashfree Error: {e}")
         return Response(
             content=json.dumps({"success": False, "error": str(e)}),
             status_code=500,
@@ -488,18 +516,31 @@ async def create_payment_order(request: Request):
 @app.post("/api/verify-payment")
 async def verify_payment(request: Request):
     body = await request.json()
-    razorpay_order_id = body.get("razorpay_order_id", "")
-    razorpay_payment_id = body.get("razorpay_payment_id", "")
-    razorpay_signature = body.get("razorpay_signature", "")
+    order_id = body.get("order_id", "")
+    
+    url = f"https://sandbox.cashfree.com/pg/orders/{order_id}" if CASHFREE_ENV == "SANDBOX" else f"https://api.cashfree.com/pg/orders/{order_id}"
+    headers = {
+        "accept": "application/json",
+        "x-client-id": CASHFREE_APP_ID,
+        "x-client-secret": CASHFREE_SECRET_KEY,
+        "x-api-version": "2023-08-01",
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 200:
+                order_data = resp.json()
+                if order_data.get("order_status") == "PAID":
+                    generated_signature_matched = True # Equivalent of matching signature since we fetch from their API directly
+                else:
+                    return {"success": False, "error": f"Order status is {order_data.get('order_status')}"}
+            else:
+                return {"success": False, "error": "Could not verify with Cashfree API"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
-    message = f"{razorpay_order_id}|{razorpay_payment_id}"
-    generated = hmac.new(
-        RAZORPAY_KEY_SECRET.encode(),
-        message.encode(),
-        hashlib.sha256,
-    ).hexdigest()
-
-    if generated == razorpay_signature:
+    if generated_signature_matched:
 
         event_id_promo = body.get("eventId")
         promo_code_used = body.get("promoCode")

@@ -5,7 +5,6 @@ python-dotenv==1.0.1
 python-socketio==5.12.1
 pydantic==2.10.4
 cryptography==44.0.0
-razorpay==1.4.2
 setuptools<81
 httpx==0.28.1
 pywebpush==1.14.0

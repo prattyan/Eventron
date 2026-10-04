@@ -302,14 +302,14 @@ const resizeImage = (imageSrc: string, maxDimension: number = 1024): Promise<str
 
 
 
-const loadRazorpay = () => {
+const loadCashfree = () => {
   return new Promise((resolve) => {
-    if ((window as any).Razorpay) {
+    if ((window as any).Cashfree) {
       resolve(true);
       return;
     }
     const script = document.createElement('script');
-    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
     script.onload = () => {
       resolve(true);
     };
@@ -1443,16 +1443,6 @@ export default function App() {
     setTimeout(() => document.body.removeChild(iframe), 10000);
   };
 
-  const loadRazorpay = () => {
-    return new Promise((resolve) => {
-      const script = document.createElement('script');
-      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-      script.onload = () => resolve(true);
-      script.onerror = () => resolve(false);
-      document.body.appendChild(script);
-    });
-  };
-
   const resetEventForm = () => {
     setNewEvent({
       title: '', date: '', endDate: '', location: '', locationType: 'offline', description: '', capacity: '', imageUrl: '', customQuestions: [], collaboratorEmails: [], tags: [],
@@ -1956,9 +1946,9 @@ export default function App() {
     }
 
     try {
-      const loaded = await loadRazorpay();
+      const loaded = await loadCashfree();
       if (!loaded) {
-        addToast('Razorpay SDK failed to load', 'error');
+        addToast('Cashfree SDK failed to load', 'error');
         return;
       }
 
@@ -1981,33 +1971,46 @@ export default function App() {
       });
 
       const orderData = await orderRes.json();
-      if (!orderData.success) {
+      if (!orderData.success || !orderData.payment_session_id) {
         addToast('Payment order creation failed', 'error');
         return;
       }
 
-      const options = {
-        key: import.meta.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_YourKeyIdPlaceholder',
-        amount: orderData.order.amount,
-        currency: orderData.order.currency,
-        name: event.title,
-        description: 'Event Ticket Confirmation',
-        image: event.imageUrl,
-        order_id: orderData.order.id,
-        handler: async function (response: any) {
+      const cashfree = await (window as any).Cashfree({ mode: "sandbox" }); 
+      // NOTE: mode should ideally be derived from an env variable like import.meta.env.VITE_CASHFREE_ENV || "sandbox"
+      
+      cashfree.checkout({
+        paymentSessionId: orderData.payment_session_id,
+        redirectTarget: "_modal"
+      }).then(async (result: any) => {
+        if (result.error) {
+          addToast(`Payment failed: ${result.error.message}`, 'warning');
+          return;
+        }
+        
+        if (result.paymentDetails) {
           // Verify payment & increment promo usage on backend
           try {
             const baseUrl = import.meta.env.VITE_API_URL || '';
-            await fetch(`${baseUrl}/api/verify-payment`, {
+            const verifyRes = await fetch(`${baseUrl}/api/verify-payment`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                ...response,
+                order_id: orderData.order_id,
                 eventId: reg.eventId,
                 promoCode: paymentAppliedPromo?.code
               })
             });
-          } catch (e) { console.error("verify-payment failed", e); }
+            const verifyData = await verifyRes.json();
+            if (!verifyData.success) {
+               addToast(`Payment verification failed: ${verifyData.error}`, 'error');
+               return;
+            }
+          } catch (e) { 
+             console.error("verify-payment failed", e);
+             addToast('Payment verification failed', 'error');
+             return;
+          }
 
           // Update local/mongo status for this registration and all team members if applicable
           const paymentInfo = {
@@ -2015,8 +2018,8 @@ export default function App() {
               status: PaymentStatus.COMPLETED,
               amount: amount,
               currency: 'INR',
-              transactionId: response.razorpay_payment_id || response.razorpay_order_id,
-              orderId: response.razorpay_order_id,
+              transactionId: orderData.order_id,
+              orderId: orderData.order_id,
               promocodeApplied: paymentAppliedPromo?.code
             }
           };
@@ -2038,29 +2041,13 @@ export default function App() {
             eventDate: event.date,
             eventLocation: event.location,
             amount,
-            transactionId: response.razorpay_payment_id || response.razorpay_order_id,
-            orderId: response.razorpay_order_id,
+            transactionId: orderData.order_id,
+            orderId: orderData.order_id,
             promoCode: paymentAppliedPromo?.code,
             registrationId: reg.id,
           });
-        },
-        prefill: {
-          name: currentUser?.name || reg.participantName,
-          email: currentUser?.email || reg.participantEmail,
-          contact: currentUser?.phoneNumber
-        },
-        theme: {
-          color: '#ea580c'
-        },
-        modal: {
-          ondismiss: function () {
-            addToast('Payment cancelled', 'warning');
-          }
         }
-      };
-
-      const rzp = new (window as any).Razorpay(options);
-      rzp.open();
+      });
 
     } catch (e: any) {
       console.error("Payment Error", e);
