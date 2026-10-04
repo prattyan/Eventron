@@ -34,6 +34,7 @@ const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
 const TermsPage = lazy(() => import('./components/TermsPage'));
 const PrivacyPage = lazy(() => import('./components/PrivacyPage'));
 const RefundPage = lazy(() => import('./components/RefundPage'));
+const NotFound = lazy(() => import('./components/NotFound'));
 import CaptchaWidget from './components/CaptchaWidget';
 
 // --- Sub-Components ---
@@ -4272,7 +4273,7 @@ export default function App() {
           <Route path="/terms" element={<Suspense fallback={<div className="pt-32 text-center text-slate-400"><Loader2 className="w-8 h-8 animate-spin mx-auto text-orange-500" /></div>}><TermsPage /></Suspense>} />
           <Route path="/privacy" element={<Suspense fallback={<div className="pt-32 text-center text-slate-400"><Loader2 className="w-8 h-8 animate-spin mx-auto text-orange-500" /></div>}><PrivacyPage /></Suspense>} />
           <Route path="/refund" element={<Suspense fallback={<div className="pt-32 text-center text-slate-400"><Loader2 className="w-8 h-8 animate-spin mx-auto text-orange-500" /></div>}><RefundPage /></Suspense>} />
-          <Route path="*" element={<Navigate to="/explore" replace />} />
+          <Route path="*" element={<Suspense fallback={<div className="pt-32 text-center text-slate-400"><Loader2 className="w-8 h-8 animate-spin mx-auto text-orange-500" /></div>}><NotFound /></Suspense>} />
         </Routes>
       </main>
 
