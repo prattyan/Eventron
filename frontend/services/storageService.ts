@@ -17,6 +17,7 @@ import {
 import { auth, db, isFirebaseConfigured, googleProvider } from "../firebaseConfig";
 import { Event, Registration, RegistrationStatus, EventStatus, User, Team, ParticipationMode } from '../types';
 import { STORAGE_KEYS } from '../constants';
+import { saveToCache, getFromCache, enqueueSyncAction, isOnline, getSyncQueue, removeSyncAction, initOfflineDB } from './offlineSyncService';
 
 const MONGO_CONFIG = {
   endpoint: '/api/action',
@@ -118,26 +119,63 @@ async function mongoRequest(action: string, collection: string, body: any, retri
 
     if (!response.ok) {
       const errorText = await response.text();
-
       console.error("MongoDB API Error:", response.status, response.statusText, errorText);
       throw new Error(`MongoDB API Error: ${response.statusText} - ${errorText}`);
     }
 
-    const jsonResponse = await response.json();
-
+    let jsonResponse = await response.json();
     if (jsonResponse.encrypted) {
-      return await decryptData(jsonResponse);
+      jsonResponse = await decryptData(jsonResponse);
+    }
+
+    if (['find', 'findOne', 'fetchBatch'].includes(action)) {
+      const cacheKey = `${action}_${collection}_${JSON.stringify(body)}`;
+      saveToCache(cacheKey, jsonResponse).catch(e => console.error("Cache save error:", e));
     }
 
     return jsonResponse;
   } catch (error) {
-    if (retries > 0) {
+    if (!isOnline()) {
+      if (['find', 'findOne', 'fetchBatch'].includes(action)) {
+        const cacheKey = `${action}_${collection}_${JSON.stringify(body)}`;
+        const cachedData = await getFromCache(cacheKey);
+        if (cachedData) {
+          console.log(`[Offline Sync] Served ${action} from cache`);
+          return cachedData;
+        }
+      } else if (['insertOne', 'updateOne', 'updateMany', 'deleteOne', 'deleteMany'].includes(action)) {
+        await enqueueSyncAction(action, collection, body);
+        return { success: true, offlineQueued: true };
+      }
+    }
+
+    if (retries > 0 && isOnline()) {
       console.log(`Fetch failed, retrying... (${retries} left)`);
       await new Promise(res => setTimeout(res, 1000));
       return mongoRequest(action, collection, body, retries - 1, userContext);
     }
     throw error;
   }
+}
+
+// Process sync queue when online
+if (typeof window !== 'undefined') {
+  initOfflineDB();
+  window.addEventListener('online', async () => {
+    console.log('[Offline Sync] Back online! Processing queue...');
+    const queue = await getSyncQueue();
+    for (const item of queue) {
+      if (item.id) {
+        try {
+          await mongoRequest(item.action, item.collection, item.body, 1); // no retries here to avoid blocking
+          await removeSyncAction(item.id);
+          console.log(`[Offline Sync] Synced action ${item.id}`);
+        } catch (e) {
+          console.error(`[Offline Sync] Failed to sync action ${item.id}`, e);
+        }
+      }
+    }
+  });
 }
 
 export const getVectorRecommendations = async (userId: string): Promise<Event[]> => {
