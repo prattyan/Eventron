@@ -639,6 +639,8 @@ export default function App() {
 
   // Payment Modal State
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [isPaymentProcessing, setIsPaymentProcessing] = useState(false);
+  const [isPaymentSuccess, setIsPaymentSuccess] = useState(false);
   const [paymentPromoCode, setPaymentPromoCode] = useState('');
   const [paymentAppliedPromo, setPaymentAppliedPromo] = useState<PromoCode | null>(null);
   const [paymentPromoMessage, setPaymentPromoMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
@@ -1844,6 +1846,22 @@ export default function App() {
     }
   };
 
+  const handleDeleteRegistration = async (regId: string) => {
+    if (!confirm('Are you sure you want to delete this registration? The attendee will be able to register again.')) return;
+    try {
+      const success = await deleteRegistration(regId);
+      if (success) {
+        setRegistrations(prev => prev.filter(r => r.id !== regId));
+        addToast('Registration deleted successfully', 'success');
+      } else {
+        addToast('Failed to delete registration', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      addToast('An error occurred while deleting', 'error');
+    }
+  };
+
   const handleStatusUpdate = async (regId: string, status: RegistrationStatus) => {
     // Check if this is a paid event and we are trying to approve it without payment
     const reg = registrations.find(r => r.id === regId);
@@ -1915,11 +1933,14 @@ export default function App() {
     setPaymentPromoCode('');
     setPaymentAppliedPromo(null);
     setPaymentPromoMessage(null);
+    setIsPaymentProcessing(false);
+    setIsPaymentSuccess(false);
     setIsPaymentModalOpen(true);
   };
 
   const handleProceedToPayment = async () => {
-    if (!selectedRegForPayment) return;
+    if (!selectedRegForPayment || isPaymentProcessing) return;
+    setIsPaymentProcessing(true);
     const { reg, event } = selectedRegForPayment;
 
     // Calculate Final Amount
@@ -1944,7 +1965,13 @@ export default function App() {
       }
       addToast("Promo code covered entire cost! Ticket confirmed.", "success");
       await loadData();
-      setIsPaymentModalOpen(false);
+      setIsPaymentSuccess(true);
+      setTimeout(() => {
+        setIsPaymentModalOpen(false);
+        setIsPaymentProcessing(false);
+        setIsPaymentSuccess(false);
+        navigate('/myticket');
+      }, 1500);
       return;
     }
 
@@ -1952,6 +1979,7 @@ export default function App() {
       const loaded = await loadCashfree();
       if (!loaded) {
         addToast('Cashfree SDK failed to load', 'error');
+        setIsPaymentProcessing(false);
         return;
       }
 
@@ -1976,6 +2004,7 @@ export default function App() {
       const orderData = await orderRes.json();
       if (!orderData.success || !orderData.payment_session_id) {
         addToast('Payment order creation failed', 'error');
+        setIsPaymentProcessing(false);
         return;
       }
 
@@ -1986,6 +2015,7 @@ export default function App() {
         paymentSessionId: orderData.payment_session_id,
         redirectTarget: "_modal"
       }).then(async (result: any) => {
+        setIsPaymentProcessing(false);
         if (result.error) {
           addToast(`Payment failed: ${result.error.message}`, 'warning');
           return;
@@ -2035,26 +2065,22 @@ export default function App() {
           }
           addToast("Payment successful! Ticket confirmed.", "success");
           loadData();
-          setIsPaymentModalOpen(false);
-          // Download PDF receipt
-          downloadPaymentReceipt({
-            userName: currentUser?.name || reg.participantName,
-            userEmail: currentUser?.email || reg.participantEmail,
-            eventTitle: event.title,
-            eventDate: event.date,
-            eventLocation: event.location,
-            amount,
-            transactionId: orderData.order_id,
-            orderId: orderData.order_id,
-            promoCode: paymentAppliedPromo?.code,
-            registrationId: reg.id,
-          });
+          setIsPaymentSuccess(true);
+          setTimeout(() => {
+            setIsPaymentModalOpen(false);
+            setIsPaymentSuccess(false);
+            navigate('/myticket');
+          }, 1500);
         }
+      }).catch((e: any) => {
+        setIsPaymentProcessing(false);
+        addToast(`Payment Error: ${e.message}`, 'error');
       });
 
     } catch (e: any) {
       console.error("Payment Error", e);
       addToast(`Payment Error: ${e.message}`, 'error');
+      setIsPaymentProcessing(false);
     }
   };
 
@@ -4036,6 +4062,7 @@ export default function App() {
                             </>
                           )}
                           <button onClick={() => setSelectedRegistrationDetails(reg)} className="p-1.5 bg-slate-800 text-slate-300 rounded-lg border border-slate-700" title="View"><ExternalLink className="w-5 h-5" /></button>
+                          <button onClick={() => handleDeleteRegistration(reg.id)} className="p-1.5 bg-red-900/30 text-red-400 rounded-lg border border-red-800 ml-1" title="Delete"><Trash2 className="w-5 h-5" /></button>
                         </div>
 
                         {reg.status === RegistrationStatus.APPROVED && !reg.attended && (
@@ -4213,6 +4240,13 @@ export default function App() {
                               className="text-slate-400 hover:text-slate-200 text-sm font-medium hover:underline ml-2"
                             >
                               View
+                            </button>
+                            <button
+                              onClick={() => handleDeleteRegistration(reg.id)}
+                              className="text-red-400 hover:text-red-300 text-sm font-medium hover:underline ml-3"
+                              title="Delete Registration"
+                            >
+                              Delete
                             </button>
                           </td>
                         </tr>
@@ -5249,9 +5283,22 @@ export default function App() {
 
                 <button
                   onClick={handleProceedToPayment}
-                  className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 rounded-2xl text-lg shadow-lg shadow-orange-600/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+                  disabled={isPaymentProcessing || isPaymentSuccess}
+                  className={`w-full font-bold py-4 rounded-2xl text-lg shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 ${
+                    isPaymentSuccess
+                      ? 'bg-green-600 text-white shadow-green-600/20'
+                      : isPaymentProcessing 
+                        ? 'bg-slate-700 text-slate-400 cursor-not-allowed shadow-none'
+                        : 'bg-orange-600 hover:bg-orange-700 text-white shadow-orange-600/20'
+                  }`}
                 >
-                  Payload Payment <ChevronRight className="w-5 h-5" />
+                  {isPaymentSuccess ? (
+                    <>Success <CheckCircle className="w-5 h-5" /></>
+                  ) : isPaymentProcessing ? (
+                    <>Processing... <Loader2 className="w-5 h-5 animate-spin" /></>
+                  ) : (
+                    <>Payload Payment <ChevronRight className="w-5 h-5" /></>
+                  )}
                 </button>
 
               </div>
