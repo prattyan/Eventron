@@ -6,6 +6,9 @@ from fastapi.responses import StreamingResponse
 import httpx
 import google.generativeai as genai
 from config import GEMINI_API_KEY, GROQ_API_KEY
+import numpy as np
+
+# We'll import the embedding and similarity functions locally to avoid circular import
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -95,12 +98,37 @@ async def chat_stream(request: Request):
         query = body.get("query", "")
         context = body.get("context", [])
 
+        # 1. Vector Similarity Search (RAG)
+        from main import get_embedding, cosine_similarity
+        
+        # Compute embedding for the user's query
+        query_vector = await get_embedding(query)
+        
+        scored_events = []
+        if query_vector and context:
+            # Generate embeddings for context events concurrently
+            async def get_event_score(e):
+                text = f"{e.get('title', '')} {e.get('description', '')} {e.get('type', '')}"
+                vec = await get_embedding(text)
+                if vec:
+                    score = cosine_similarity(query_vector, vec)
+                    return {"event": e, "score": score}
+                return {"event": e, "score": -1}
+
+            # Only process up to 20 events to avoid rate limits
+            tasks = [get_event_score(e) for e in context[:20]]
+            results = await asyncio.gather(*tasks)
+            
+            # Sort by score and take top 5
+            scored_events = sorted(results, key=lambda x: x["score"], reverse=True)[:5]
+            top_events = [res["event"] for res in scored_events]
+        else:
+            top_events = context[:5]
+
+        # Use full descriptions now that we have fewer events
         events_summary = "\n".join([
-            f"- {e.get('title')} ({e.get('type')}) on {e.get('date')} at {e.get('location')}. "
-            f"Price: {('₹' + str(e.get('price'))) if e.get('isPaid') else 'Free'}. "
-            f"Capacity: {e.get('capacity')}. "
-            f"Details: {e.get('description', '')[:100]}"
-            for e in context[:20]
+            f"- Title: {e.get('title')}\n  Type: {e.get('type')}\n  Date: {e.get('date')}\n  Location: {e.get('location')}\n  Price: {('₹' + str(e.get('price'))) if e.get('isPaid') else 'Free'}\n  Capacity: {e.get('capacity')}\n  Details: {e.get('description', '')}"
+            for e in top_events
         ])
 
         from datetime import datetime
@@ -123,7 +151,14 @@ async def chat_stream(request: Request):
         3. If the user asks about something not in the list, politely say you don't have information on that.
         4. Be helpful, concise, and professional.
         5. If recommending an event, mention its title and date.
-        6. Do not invent facts.
+        6. Do not invent facts. All prices should be formatted in INR (₹).
+
+        Examples:
+        User: "Are there any tech events?"
+        Assistant: "Yes, 'Tech Summit 2026' is happening on Oct 10th. It costs ₹500."
+        
+        User: "When is the hackathon?"
+        Assistant: "The 'Global Hackathon' is scheduled for November 15th at 10:00 AM."
         """
 
         # We will define a generator for the stream
@@ -136,7 +171,7 @@ async def chat_stream(request: Request):
                         model.generate_content,
                         prompt,
                         stream=True,
-                        generation_config={"max_output_tokens": 600, "temperature": 0.6}
+                        generation_config={"max_output_tokens": 600, "temperature": 0.1}
                     )
                     has_yielded = False
                     for chunk in response:
@@ -164,7 +199,7 @@ async def chat_stream(request: Request):
                                 "model": GROQ_MODEL_FAST,
                                 "messages": [{"role": "user", "content": prompt}],
                                 "max_tokens": 600,
-                                "temperature": 0.6,
+                                "temperature": 0.1,
                                 "stream": True,
                             },
                         ) as resp:
