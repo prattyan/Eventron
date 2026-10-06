@@ -489,11 +489,11 @@ export default function App() {
   const [showAllPastEvents, setShowAllPastEvents] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
-  const [qrTimestamp, setQrTimestamp] = useState(Math.floor(Date.now() / 600000));
+  const [qrTimestamp, setQrTimestamp] = useState(Math.floor(Date.now() / 180000));
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setQrTimestamp(Math.floor(Date.now() / 600000));
+      setQrTimestamp(Math.floor(Date.now() / 180000));
     }, 60000);
     return () => clearInterval(interval);
   }, []);
@@ -2288,7 +2288,7 @@ export default function App() {
       const payload = JSON.parse(data);
       if (!payload.id) throw new Error('Invalid QR Code');
 
-      const currentTs = Math.floor(Date.now() / 600000);
+      const currentTs = Math.floor(Date.now() / 180000);
       if (payload.ts !== undefined && payload.ts !== 'static') {
         if (currentTs - payload.ts > 1 || payload.ts > currentTs) {
           setScanResult({ type: 'error', message: 'Ticket Expired, please refresh' });
