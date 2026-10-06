@@ -1702,7 +1702,7 @@ export default function App() {
         participantName: currentUser.name,
         participantEmail: email,
         status: initialStatus,
-        attendance: false,
+        attended: false,
         registeredAt: new Date().toISOString(),
         answers: registrationAnswers,
         participantAvatarUrl: currentUser.avatarUrl
