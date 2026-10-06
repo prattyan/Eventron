@@ -36,8 +36,7 @@ const EventChatBot: React.FC<EventChatBotProps> = ({ events, currentUserId }) =>
         id: 'welcome',
         text: currentStatus.isOnline
             ? "Hi! I'm your Eventron AI assistant. Ask me anything about our upcoming events!"
-            : `**AI Assistant Offline**\n\n${currentStatus.errorMessage || 'The Gemini API is inactive, suspended, or unconfigured.'
-            }\n\nTo enable the AI assistant, please ensure an active \`VITE_GEMINI_API_KEY\` is configured in your \`.env\` file.`,
+            : `**Chatbot is offline**`,
         sender: 'bot',
         timestamp: new Date()
     });
@@ -231,7 +230,7 @@ const EventChatBot: React.FC<EventChatBotProps> = ({ events, currentUserId }) =>
                                 ? "Eventron AI Assistant (Online)"
                                 : isChecking
                                     ? "Eventron AI Assistant (Checking Status...)"
-                                    : `Eventron AI Assistant (Offline: ${statusState.errorMessage || 'API Inactive'})`
+                                    : `Eventron AI Assistant (Offline)`
                         }
                         className="fixed bottom-6 right-6 z-50 w-14 h-14 bg-gradient-to-r from-orange-600 to-amber-600 rounded-full shadow-lg shadow-orange-600/30 flex items-center justify-center text-white border border-white/10 group"
                     >
@@ -317,12 +316,7 @@ const EventChatBot: React.FC<EventChatBotProps> = ({ events, currentUserId }) =>
                                 <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                                 <div className="flex-1">
                                     <p className="font-semibold text-rose-200">
-                                        {statusState.reason === 'missing_key'
-                                            ? 'AI Assistant Not Configured'
-                                            : 'AI Assistant Offline'}
-                                    </p>
-                                    <p className="text-[11px] text-rose-300/80 leading-snug mt-0.5">
-                                        {statusState.errorMessage || 'AI service is currently unavailable.'}
+                                        Chatbot is offline
                                     </p>
                                 </div>
                             </div>
@@ -407,7 +401,7 @@ const EventChatBot: React.FC<EventChatBotProps> = ({ events, currentUserId }) =>
                                             ? "Ask about events..."
                                             : isChecking
                                                 ? "Checking Gemini API status..."
-                                                : "Chat unavailable (Gemini API Offline)"
+                                                : "Chatbot is offline"
                                     }
                                     disabled={!isOnline || isLoading || isChecking}
                                     className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-orange-500 transition-colors placeholder:text-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -425,7 +419,7 @@ const EventChatBot: React.FC<EventChatBotProps> = ({ events, currentUserId }) =>
                                 <p className="text-[10px] text-slate-500">
                                     {isOnline
                                         ? "AI can make mistakes. Verify info."
-                                        : "Configure an active VITE_GEMINI_API_KEY in .env to enable AI chat."}
+                                        : "Chatbot is currently offline."}
                                 </p>
                             </div>
                         </form>

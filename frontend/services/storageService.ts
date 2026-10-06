@@ -112,6 +112,15 @@ async function mongoRequest(action: string, collection: string, body: any, retri
       headers['X-User-Role'] = userContext.userRole;
     }
 
+    // Fetch cache to attach client hashes for fetchBatch
+    let cacheKey = `${action}_${collection}_${JSON.stringify(body)}`;
+    if (action === 'fetchBatch') {
+      const cachedData = await getFromCache(cacheKey);
+      if (cachedData && cachedData.hashes) {
+        body.clientHashes = cachedData.hashes;
+      }
+    }
+
     const response = await fetch(`${MONGO_CONFIG.endpoint}/${action}`, {
       method: 'POST',
       headers,
@@ -132,8 +141,22 @@ async function mongoRequest(action: string, collection: string, body: any, retri
       jsonResponse = await decryptData(jsonResponse);
     }
 
+    if (action === 'fetchBatch' && body.clientHashes) {
+      const cachedData = await getFromCache(cacheKey);
+      if (cachedData && cachedData.results && jsonResponse.results) {
+        for (let i = 0; i < jsonResponse.results.length; i++) {
+          if (jsonResponse.results[i] && jsonResponse.results[i].notModified) {
+            jsonResponse.results[i] = cachedData.results[i];
+          }
+        }
+      }
+    }
+
     if (['find', 'findOne', 'fetchBatch'].includes(action)) {
-      const cacheKey = `${action}_${collection}_${JSON.stringify(body)}`;
+      // Re-evaluate cacheKey without clientHashes so it remains stable
+      const baseBody = { ...body };
+      delete baseBody.clientHashes;
+      cacheKey = `${action}_${collection}_${JSON.stringify(baseBody)}`;
       saveToCache(cacheKey, jsonResponse).catch(e => console.error("Cache save error:", e));
     }
 

@@ -489,6 +489,14 @@ export default function App() {
   const [showAllPastEvents, setShowAllPastEvents] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [qrTimestamp, setQrTimestamp] = useState(Math.floor(Date.now() / 600000));
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setQrTimestamp(Math.floor(Date.now() / 600000));
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
   // Real-time spots pulse: tracks event IDs that just received a new registration
   const [flashedEventIds, setFlashedEventIds] = useState<Set<string>>(new Set());
 
@@ -2279,6 +2287,15 @@ export default function App() {
     try {
       const payload = JSON.parse(data);
       if (!payload.id) throw new Error('Invalid QR Code');
+
+      const currentTs = Math.floor(Date.now() / 600000);
+      if (payload.ts !== undefined && payload.ts !== 'static') {
+        if (currentTs - payload.ts > 1 || payload.ts > currentTs) {
+          setScanResult({ type: 'error', message: 'Ticket Expired, please refresh' });
+          setTimeout(() => setScanResult(null), 3000);
+          return;
+        }
+      }
 
       // Security Check: Verify Organizer Ownership or Collaborative Rights
       const reg = registrations.find(r => r.id === payload.id);
@@ -6210,7 +6227,7 @@ export default function App() {
                   <div className="relative z-10">
                     <QRCode
                       id="ticket-qr-code"
-                      value={JSON.stringify({ id: selectedTicket.id, eventId: selectedTicket.eventId })}
+                      value={JSON.stringify({ id: selectedTicket.id, eventId: selectedTicket.eventId, ts: selectedTicket.attended ? 'static' : qrTimestamp })}
                       size={220}
                       level="M"
                     />

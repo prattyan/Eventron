@@ -835,50 +835,70 @@ async def data_action(action: str, request: Request):
                     )
 
             # Run all sub-queries concurrently using asyncio.gather
-            async def _run_sub_query(req_item: dict) -> dict:
+            async def _run_sub_query(idx: int, req_item: dict) -> dict:
                 sub_col_name = req_item.get("collection", "")
                 sub_col = db[sub_col_name]
+                sub_action = req_item.get("action")
 
-                if req_item.get("action") == "find":
-                    sub_query = req_item.get("filter") or {}
-                    sub_projection = req_item.get("projection")
-                    sub_sort = req_item.get("sort")
-                    sub_limit = req_item.get("limit")
+                req_hash = hashlib.md5(json.dumps(req_item, sort_keys=True, default=str).encode()).hexdigest()
+                uc_clean = {
+                    "userId": user_context.get("userId"),
+                    "userEmail": user_context.get("userEmail"),
+                    "role": user_context.get("role"),
+                    "userTeamIds": list(user_context.get("userTeamIds", set()))
+                }
+                user_hash = hashlib.md5(json.dumps(uc_clean, sort_keys=True, default=str).encode()).hexdigest()
+                sub_cache_key = f"cache:{sub_col_name}:batch_{sub_action}:{req_hash}:{user_hash}"
 
-                    def _do_sub_find():
-                        cur = sub_col.find(sub_query, sub_projection)
-                        if sub_sort:
-                            cur = cur.sort([(k, v) for k, v in sub_sort.items()])
-                        if sub_limit:
-                            cur = cur.limit(int(sub_limit))
-                        return _serialise(list(cur))
-
-                    docs = await asyncio.to_thread(_do_sub_find)
-                    filtered = sanitize_data_for_user(docs, sub_col_name, user_context, all_events)
-                    return {"documents": filtered}
-
-                elif req_item.get("action") == "findOne":
-                    sub_projection = req_item.get("projection")
-
-                    doc = await asyncio.to_thread(
-                        lambda: _serialise(sub_col.find_one(req_item.get("filter") or {}, sub_projection))
-                    )
-
-                    # Build managed event IDs for single doc sanitisation
-                    user_managed = set()
-                    for ev in all_events:
-                        if is_organizer_or_collaborator(
-                            ev, user_context.get("userId"), user_context.get("userEmail")
-                        ):
-                            user_managed.add(ev.get("id", ""))
-                    filtered_doc = _sanitize_single_doc(doc, sub_col_name, user_context, user_managed)
-                    return {"document": filtered_doc}
+                cached_sub = cache.get(sub_cache_key)
+                if cached_sub:
+                    docs, data_hash = cached_sub
                 else:
-                    return {"error": "Unsupported batch action"}
+                    if sub_action == "find":
+                        sub_query = req_item.get("filter") or {}
+                        sub_projection = req_item.get("projection")
+                        sub_sort = req_item.get("sort")
+                        sub_limit = req_item.get("limit")
 
-            results = await asyncio.gather(*[_run_sub_query(r) for r in requests])
+                        def _do_sub_find():
+                            cur = sub_col.find(sub_query, sub_projection)
+                            if sub_sort:
+                                cur = cur.sort([(k, v) for k, v in sub_sort.items()])
+                            if sub_limit:
+                                cur = cur.limit(int(sub_limit))
+                            return _serialise(list(cur))
 
-            encrypted_response = encrypt_data({"results": results})
+                        docs_raw = await asyncio.to_thread(_do_sub_find)
+                        docs = sanitize_data_for_user(docs_raw, sub_col_name, user_context, all_events)
+                    elif sub_action == "findOne":
+                        sub_projection = req_item.get("projection")
+                        doc = await asyncio.to_thread(
+                            lambda: _serialise(sub_col.find_one(req_item.get("filter") or {}, sub_projection))
+                        )
+                        user_managed = set()
+                        for ev in all_events:
+                            if is_organizer_or_collaborator(ev, user_context.get("userId"), user_context.get("userEmail")):
+                                user_managed.add(ev.get("id", ""))
+                        docs = _sanitize_single_doc(doc, sub_col_name, user_context, user_managed)
+                    else:
+                        return {"error": "Unsupported batch action"}
+
+                    data_hash = hashlib.md5(json.dumps(docs, sort_keys=True, default=str).encode()).hexdigest()
+                    cache.set(sub_cache_key, (docs, data_hash), expire=CACHE_TTL)
+                
+                client_hashes = body.get("clientHashes") or {}
+                client_hash = client_hashes.get(str(idx))
+                if client_hash and client_hash == data_hash:
+                    return {"notModified": True, "hash": data_hash}
+                    
+                if sub_action == "find":
+                    return {"documents": docs, "hash": data_hash}
+                else:
+                    return {"document": docs, "hash": data_hash}
+
+            results = await asyncio.gather(*[_run_sub_query(i, r) for i, r in enumerate(requests)])
+            hashes = {str(i): r.get("hash") for i, r in enumerate(results)}
+            encrypted_response = encrypt_data({"results": results, "hashes": hashes})
             return encrypted_response
 
         else:
