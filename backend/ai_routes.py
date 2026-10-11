@@ -12,7 +12,7 @@ import numpy as np
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
-GEMINI_MODEL_FAST = "models/gemini-2.5-flash" 
+GEMINI_MODEL_FAST = "models/gemini-3.8-flash" 
 GROQ_MODEL_FAST = "allam-2-7b"
 
 @router.get("/status")

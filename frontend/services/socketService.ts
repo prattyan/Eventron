@@ -15,6 +15,12 @@ class SocketService {
 
         this.socket.on('connect', () => {
             console.log('🔌 Socket connected:', this.socket?.id);
+            const visited = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('eventron_session_active');
+            const isNewVisit = !visited;
+            if (isNewVisit && typeof sessionStorage !== 'undefined') {
+                sessionStorage.setItem('eventron_session_active', '1');
+            }
+            this.socket?.emit('record_visit', { isNewVisit });
         });
 
         this.socket.on('data_updated', (data) => {
@@ -25,9 +31,19 @@ class SocketService {
             this.trigger('notification_received', data);
         });
 
+        this.socket.on('active_users_count', (data) => {
+            this.trigger('active_users_count', data);
+        });
+
         this.socket.on('disconnect', () => {
             console.log('🔌 Socket disconnected');
         });
+    }
+
+    requestActiveUsers() {
+        if (this.socket && this.socket.connected) {
+            this.socket.emit('get_active_users');
+        }
     }
 
     on(event: string, callback: (data: any) => void) {

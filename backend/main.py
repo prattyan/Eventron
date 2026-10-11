@@ -154,15 +154,85 @@ class SlowRequestLoggerMiddleware(BaseHTTPMiddleware):
 
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 
+connected_sids: set[str] = set()
+
+
+def _get_visitor_count() -> int:
+    try:
+        db = get_db()
+        doc = db["site_stats"].find_one({"_id": "visitors"})
+        if not doc:
+            initial_count = max(db["users"].count_documents({}), 50)
+            db["site_stats"].update_one(
+                {"_id": "visitors"},
+                {"$setOnInsert": {"count": initial_count}},
+                upsert=True,
+            )
+            return initial_count
+        return doc.get("count", 0)
+    except Exception as e:
+        print(f"Error fetching visitor count: {e}")
+        return 0
+
+
+def _increment_visitor_count() -> int:
+    try:
+        from pymongo import ReturnDocument
+
+        db = get_db()
+        doc = db["site_stats"].find_one({"_id": "visitors"})
+        if not doc:
+            initial_count = max(db["users"].count_documents({}), 50) + 1
+            db["site_stats"].update_one(
+                {"_id": "visitors"},
+                {"$setOnInsert": {"count": initial_count}},
+                upsert=True,
+            )
+            return initial_count
+        res = db["site_stats"].find_one_and_update(
+            {"_id": "visitors"},
+            {"$inc": {"count": 1}},
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+        return res.get("count", 1) if res else 1
+    except Exception as e:
+        print(f"Error incrementing visitor count: {e}")
+        return 0
+
 
 @sio.event
 async def connect(sid, environ):
-    print(f"📱 User connected: {sid}")
+    connected_sids.add(sid)
+    count = len(connected_sids)
+    total_visitors = await asyncio.to_thread(_get_visitor_count)
+    print(f"📱 User connected: {sid} (Total active: {count}, Total visitors: {total_visitors})")
+    await sio.emit("active_users_count", {"count": count, "totalVisitors": total_visitors})
 
 
 @sio.event
 async def disconnect(sid):
-    print(f"📱 User disconnected: {sid}")
+    connected_sids.discard(sid)
+    count = len(connected_sids)
+    total_visitors = await asyncio.to_thread(_get_visitor_count)
+    print(f"📱 User disconnected: {sid} (Total active: {count})")
+    await sio.emit("active_users_count", {"count": count, "totalVisitors": total_visitors})
+
+
+@sio.on("get_active_users")
+async def handle_get_active_users(sid, data=None):
+    total_visitors = await asyncio.to_thread(_get_visitor_count)
+    await sio.emit("active_users_count", {"count": len(connected_sids), "totalVisitors": total_visitors}, to=sid)
+
+
+@sio.on("record_visit")
+async def handle_record_visit(sid, data=None):
+    is_new = bool(data and data.get("isNewVisit")) if isinstance(data, dict) else False
+    if is_new:
+        total_visitors = await asyncio.to_thread(_increment_visitor_count)
+    else:
+        total_visitors = await asyncio.to_thread(_get_visitor_count)
+    await sio.emit("active_users_count", {"count": len(connected_sids), "totalVisitors": total_visitors})
 
 
 
@@ -184,6 +254,18 @@ app = FastAPI(title="EventHorizon API", lifespan=lifespan)
 
 from ai_routes import router as ai_router
 app.include_router(ai_router)
+
+
+@app.get("/api/active-users")
+async def get_active_users(record_visit: bool = False):
+    if record_visit:
+        total_visitors = await asyncio.to_thread(_increment_visitor_count)
+    else:
+        total_visitors = await asyncio.to_thread(_get_visitor_count)
+    return {
+        "activeUsers": len(connected_sids),
+        "totalVisitors": total_visitors
+    }
 
 
 app.add_middleware(GZipMiddleware, minimum_size=500)

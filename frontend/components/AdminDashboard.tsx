@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Users, Calendar, Ticket, Shield, Search, Trash2, Edit, AlertCircle, CheckCircle, Database, LayoutDashboard, RefreshCw, LogOut, TrendingUp, Clock, MapPin, XCircle } from 'lucide-react';
+import { Users, Calendar, Ticket, Shield, Search, Trash2, Edit, AlertCircle, CheckCircle, Database, LayoutDashboard, RefreshCw, LogOut, TrendingUp, Clock, MapPin, XCircle, Activity, Globe } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
 import { User, Event, Registration, Role, EventStatus } from '../types';
 import { getAdminData, deleteAccount, deleteEvent, updateEvent, saveUserProfile, updateEventStatus } from '../services/storageService';
+import { socketService } from '../services/socketService';
 
 interface AdminDashboardProps {
     currentUser: User;
@@ -18,6 +20,8 @@ export default function AdminDashboard({ currentUser, onLogout }: AdminDashboard
     const [users, setUsers] = useState<User[]>([]);
     const [events, setEvents] = useState<Event[]>([]);
     const [registrations, setRegistrations] = useState<Registration[]>([]);
+    const [activeUsersCount, setActiveUsersCount] = useState<number>(1);
+    const [totalVisitorsCount, setTotalVisitorsCount] = useState<number>(0);
 
     // Filtering states
     const [searchTerm, setSearchTerm] = useState('');
@@ -48,9 +52,52 @@ export default function AdminDashboard({ currentUser, onLogout }: AdminDashboard
         loadData();
     }, [currentUser]);
 
+    useEffect(() => {
+        socketService.connect();
+
+        const fetchInitialActiveUsers = async () => {
+            try {
+                const apiBase = Capacitor.isNativePlatform()
+                    ? 'https://eventron.xyz'
+                    : (import.meta.env.VITE_API_URL || '');
+                const res = await fetch(`${apiBase}/api/active-users`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (typeof data.activeUsers === 'number') {
+                        setActiveUsersCount(data.activeUsers);
+                    }
+                    if (typeof data.totalVisitors === 'number') {
+                        setTotalVisitorsCount(data.totalVisitors);
+                    }
+                }
+            } catch (e) {
+                console.warn("Could not fetch active users via REST", e);
+            }
+        };
+
+        fetchInitialActiveUsers();
+
+        const handleActiveUsers = (data: any) => {
+            if (data && typeof data.count === 'number') {
+                setActiveUsersCount(data.count);
+            }
+            if (data && typeof data.totalVisitors === 'number') {
+                setTotalVisitorsCount(data.totalVisitors);
+            }
+        };
+
+        socketService.on('active_users_count', handleActiveUsers);
+        socketService.requestActiveUsers();
+
+        return () => {
+            socketService.off('active_users_count', handleActiveUsers);
+        };
+    }, []);
+
     const handleRefresh = () => {
         setRefreshing(true);
         loadData();
+        socketService.requestActiveUsers();
     };
 
     const handleDeleteUser = async (userId: string) => {
@@ -101,16 +148,33 @@ export default function AdminDashboard({ currentUser, onLogout }: AdminDashboard
     );
 
     const getStats = () => [
-        { label: 'Total Users', value: users.length, icon: Users, color: 'text-blue-400', bg: 'bg-blue-500/10' },
-        { label: 'Total Events', value: events.length, icon: Calendar, color: 'text-purple-400', bg: 'bg-purple-500/10' },
-        { label: 'Registrations', value: registrations.length, icon: Ticket, color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
-        { label: 'Revenue', value: `₹${registrations.reduce((acc, r) => acc + (r.paymentDetails?.amount || 0), 0)}`, icon: Database, color: 'text-amber-400', bg: 'bg-amber-500/10' },
+        {
+            label: 'Live Active Users',
+            value: activeUsersCount,
+            icon: Activity,
+            color: 'text-emerald-400',
+            bg: 'bg-emerald-500/10',
+            isLive: true
+        },
+        {
+            label: 'Total Visitors',
+            value: totalVisitorsCount ? totalVisitorsCount.toLocaleString() : '—',
+            icon: Globe,
+            color: 'text-cyan-400',
+            bg: 'bg-cyan-500/10',
+            isLive: false
+        },
+        { label: 'Total Users', value: users.length, icon: Users, color: 'text-blue-400', bg: 'bg-blue-500/10', isLive: false },
+        { label: 'Total Events', value: events.length, icon: Calendar, color: 'text-purple-400', bg: 'bg-purple-500/10', isLive: false },
+        { label: 'Registrations', value: registrations.length, icon: Ticket, color: 'text-teal-400', bg: 'bg-teal-500/10', isLive: false },
+        { label: 'Revenue', value: `₹${registrations.reduce((acc, r) => acc + (r.paymentDetails?.amount || 0), 0)}`, icon: Database, color: 'text-amber-400', bg: 'bg-amber-500/10', isLive: false },
         {
             label: 'Pending Approvals',
             value: events.filter(e => e.status === EventStatus.PENDING).length,
             icon: AlertCircle,
             color: 'text-rose-400',
-            bg: 'bg-rose-500/10'
+            bg: 'bg-rose-500/10',
+            isLive: false
         },
     ];
 
@@ -173,21 +237,31 @@ export default function AdminDashboard({ currentUser, onLogout }: AdminDashboard
                     <p className="text-slate-400 mt-1">Manage users, events, and system settings</p>
                 </div>
 
-                <button
-                    onClick={handleRefresh}
-                    disabled={refreshing || loading}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-white font-medium disabled:opacity-50"
-                >
-                    <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-                    Refresh Data
-                </button>
-                <button
-                    onClick={onLogout}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 transition-all text-rose-400 font-medium"
-                >
-                    <LogOut className="w-4 h-4" />
-                    Logout
-                </button>
+                <div className="flex items-center gap-3 flex-wrap">
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm font-semibold">
+                        <span className="relative flex h-2.5 w-2.5">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                        </span>
+                        <span>{activeUsersCount} {activeUsersCount === 1 ? 'user' : 'users'} online</span>
+                    </div>
+
+                    <button
+                        onClick={handleRefresh}
+                        disabled={refreshing || loading}
+                        className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-white font-medium disabled:opacity-50"
+                    >
+                        <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+                        Refresh Data
+                    </button>
+                    <button
+                        onClick={onLogout}
+                        className="flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 transition-all text-rose-400 font-medium"
+                    >
+                        <LogOut className="w-4 h-4" />
+                        Logout
+                    </button>
+                </div>
             </div>
 
             {/* Tabs */}
@@ -221,14 +295,24 @@ export default function AdminDashboard({ currentUser, onLogout }: AdminDashboard
                         transition={{ duration: 0.2 }}
                     >
                         {/* DASHBOARD */}
-                        {/* DASHBOARD */}
                         {activeTab === 'dashboard' && (
                             <div className="space-y-8">
                                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                                     {getStats().map((stat, i) => (
-                                        <div key={i} className="bg-white/[0.02] border border-white/10 rounded-2xl p-6 hover:bg-white/[0.04] transition-all group">
-                                            <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 ${stat.bg} ${stat.color}`}>
-                                                <stat.icon className="w-6 h-6" />
+                                        <div key={i} className="bg-white/[0.02] border border-white/10 rounded-2xl p-6 hover:bg-white/[0.04] transition-all group relative overflow-hidden">
+                                            <div className="flex items-center justify-between mb-4">
+                                                <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${stat.bg} ${stat.color}`}>
+                                                    <stat.icon className="w-6 h-6" />
+                                                </div>
+                                                {stat.isLive && (
+                                                    <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold tracking-wider">
+                                                        <span className="relative flex h-2 w-2">
+                                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                                        </span>
+                                                        LIVE NOW
+                                                    </div>
+                                                )}
                                             </div>
                                             <h3 className="text-slate-400 text-sm font-medium uppercase tracking-wider">{stat.label}</h3>
                                             <p className="text-3xl font-black text-white mt-1 font-outfit">{stat.value}</p>
