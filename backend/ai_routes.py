@@ -12,15 +12,15 @@ import numpy as np
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
-GEMINI_MODEL_FAST = "models/gemini-3.8-flash" 
-GROQ_MODEL_FAST = "allam-2-7b"
+GEMINI_MODEL_FAST = "models/gemini-2.5-flash" 
+GROQ_MODEL_FAST = "qwen/qwen3.8-27b"
 
 @router.get("/status")
 async def get_ai_status():
-    if GEMINI_API_KEY:
-        return {"configured": True, "activeProvider": "gemini"}
-    elif GROQ_API_KEY:
+    if GROQ_API_KEY:
         return {"configured": True, "activeProvider": "groq"}
+    elif GEMINI_API_KEY:
+        return {"configured": True, "activeProvider": "gemini"}
     return {"configured": False, "activeProvider": None}
 
 @router.post("/describe")
@@ -46,24 +46,10 @@ async def generate_description(request: Request):
         4. Return ONLY the text, no markdown code blocks.
         """
 
-        # Try Gemini First
-        if GEMINI_API_KEY:
-            try:
-                model = genai.GenerativeModel(GEMINI_MODEL_FAST)
-                result = await asyncio.to_thread(
-                    model.generate_content,
-                    prompt,
-                    generation_config={"max_output_tokens": 400, "temperature": 0.7}
-                )
-                if result and result.text:
-                    return {"description": result.text.strip()}
-            except Exception as e:
-                print(f"Gemini description generation failed: {e}")
-        
-        # Try Groq Fallback
+        # 1. Try Groq First (Ultra-fast LPU inference, < 1 second response)
         if GROQ_API_KEY:
             try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
+                async with httpx.AsyncClient(timeout=8.0) as client:
                     resp = await client.post(
                         "https://api.groq.com/openai/v1/chat/completions",
                         headers={
@@ -77,12 +63,33 @@ async def generate_description(request: Request):
                             "temperature": 0.7,
                         },
                     )
-                    resp.raise_for_status()
-                    data = resp.json()
-                    content = data["choices"][0]["message"]["content"].strip()
-                    return {"description": content}
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        content = data["choices"][0]["message"]["content"].strip()
+                        if content:
+                            return {"description": content}
+                    else:
+                        print(f"Groq description returned status {resp.status_code}: {resp.text}")
             except Exception as e:
                 print(f"Groq description generation failed: {e}")
+
+        # 2. Try Gemini Fallback
+        if GEMINI_API_KEY:
+            try:
+                genai.configure(api_key=GEMINI_API_KEY)
+                model = genai.GenerativeModel(GEMINI_MODEL_FAST)
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        model.generate_content,
+                        prompt,
+                        generation_config={"max_output_tokens": 400, "temperature": 0.7}
+                    ),
+                    timeout=10.0
+                )
+                if result and result.text:
+                    return {"description": result.text.strip()}
+            except Exception as e:
+                print(f"Gemini description generation failed: {e}")
 
         return Response(content=json.dumps({"error": "AI Services unavailable"}), status_code=503)
 

@@ -475,6 +475,19 @@ export default function App() {
     else if (tab === 'my-tickets') navigate('/myticket');
     else navigate(`/${tab}`);
   };
+
+  const navigateByRole = (user: User) => {
+    if (user.role === 'admin') {
+      setActiveTab('admin');
+      navigate('/admin');
+    } else if (user.role === 'organizer') {
+      setActiveTab('organizer');
+      navigate('/organizer');
+    } else {
+      setActiveTab('browse');
+      navigate('/explore');
+    }
+  };
   const [events, setEvents] = useState<AppEvent[]>([]);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -661,7 +674,9 @@ export default function App() {
     const unsubscribe = subscribeToAuth((user) => {
       setCurrentUser(user);
       if (user) {
-        if (user.role === 'organizer') {
+        if (user.role === 'admin') {
+          setActiveTab('admin');
+        } else if (user.role === 'organizer') {
           setActiveTab('organizer');
         } else {
           setActiveTab('browse');
@@ -670,7 +685,7 @@ export default function App() {
         // Close auth modal and navigate away from landing page on any successful auth
         setIsAuthModalOpen(false);
         if (window.location.pathname === '/' || window.location.pathname === '') {
-          navigate('/explore');
+          navigateByRole(user);
         }
       } else {
         setEvents([]);
@@ -938,7 +953,13 @@ export default function App() {
   useEffect(() => {
     if (location.pathname === '/') {
       if (currentUser) {
-        navigate('/explore');
+        if (currentUser.role === 'admin') {
+          navigate('/admin', { replace: true });
+        } else if (currentUser.role === 'organizer') {
+          navigate('/organizer', { replace: true });
+        } else {
+          navigate('/explore', { replace: true });
+        }
       } else {
         setIsAuthModalOpen(true);
       }
@@ -946,10 +967,10 @@ export default function App() {
   }, [location.pathname, currentUser, navigate]);
 
   useEffect(() => {
-    if (currentUser?.role === 'admin' && activeTab !== 'admin') {
+    if (currentUser?.role === 'admin' && location.pathname === '/admin' && activeTab !== 'admin') {
       setActiveTab('admin');
     }
-  }, [currentUser, activeTab]);
+  }, [currentUser, location.pathname, activeTab]);
 
   useEffect(() => {
     loadData();
@@ -1281,11 +1302,9 @@ export default function App() {
 
     if (user) {
       setCurrentUser(user);
-      if (user.role === 'organizer') setActiveTab('organizer');
-      else setActiveTab('browse');
       setIsAuthModalOpen(false);
       setCaptchaVerified(false);
-      navigate('/explore');
+      navigateByRole(user);
       addToast(`Welcome back, ${user.name} !`, 'success');
     } else {
       setAuthError('Incorrect email or password. Please try again.');
@@ -1315,11 +1334,9 @@ export default function App() {
 
     if (newUser) {
       setCurrentUser(newUser);
-      if (newUser.role === 'organizer') setActiveTab('organizer');
-      else setActiveTab('browse');
       setIsAuthModalOpen(false);
       setCaptchaVerified(false);
-      navigate('/explore');
+      navigateByRole(newUser);
       addToast('Account created successfully!', 'success');
     } else {
       setAuthError('This email is already registered. Try signing in instead.');
@@ -2520,10 +2537,8 @@ export default function App() {
       const user = await verifyPhoneOtp(confirmationResult, otp, fullPhone);
       if (user) {
         setCurrentUser(user);
-        if (user.role === 'organizer') setActiveTab('organizer');
-        else setActiveTab('browse');
         setIsAuthModalOpen(false);
-        navigate('/explore');
+        navigateByRole(user);
         addToast('Logged in successfully!', 'success');
         setAuthForm({ name: '', email: '', password: '', role: 'attendee' });
         setPhoneNumber('');
@@ -2819,7 +2834,7 @@ export default function App() {
                             if (user) {
                               setCurrentUser(user);
                               setIsAuthModalOpen(false);
-                              navigate('/explore');
+                              navigateByRole(user);
                               addToast('Welcome back!', 'success');
                             } else addToast('Google Sign In failed', 'error');
                           } catch (e) { console.error(e); addToast('Something went wrong', 'error'); }
@@ -4292,20 +4307,30 @@ export default function App() {
       <main className="pt-6 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
         <Routes>
           <Route path="/" element={
-            <div className="min-h-[80vh] flex flex-col items-center justify-center relative overflow-hidden rounded-[2rem] mt-6 border border-zinc-800">
-              <div className="absolute inset-0 bg-[url('/amadeus-moga-51lUmJT3g_Y-unsplash.jpg')] bg-cover bg-center opacity-30"></div>
-              <div className="absolute inset-0 bg-gradient-to-t from-[#16161a] via-[#16161a]/80 to-transparent"></div>
-              <div className="relative z-10 text-center px-4">
-                <h1 className="text-5xl md:text-6xl font-black text-white mb-6 tracking-tight">Welcome to <span className="text-[#ff5c35]">Eventron</span></h1>
-                <p className="text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto mb-10">Sign in to discover and manage unforgettable events.</p>
-                <button onClick={() => setIsAuthModalOpen(true)} className="px-8 py-4 bg-[#ff5c35] hover:bg-[#e04d2a] text-white rounded-full font-bold transition-all shadow-lg shadow-orange-900/20 text-sm uppercase tracking-widest">Sign In</button>
+            currentUser ? (
+              currentUser.role === 'admin' ? (
+                <Navigate to="/admin" replace />
+              ) : currentUser.role === 'organizer' ? (
+                <Navigate to="/organizer" replace />
+              ) : (
+                <Navigate to="/explore" replace />
+              )
+            ) : (
+              <div className="min-h-[80vh] flex flex-col items-center justify-center relative overflow-hidden rounded-[2rem] mt-6 border border-zinc-800">
+                <div className="absolute inset-0 bg-[url('/amadeus-moga-51lUmJT3g_Y-unsplash.jpg')] bg-cover bg-center opacity-30"></div>
+                <div className="absolute inset-0 bg-gradient-to-t from-[#16161a] via-[#16161a]/80 to-transparent"></div>
+                <div className="relative z-10 text-center px-4">
+                  <h1 className="text-5xl md:text-6xl font-black text-white mb-6 tracking-tight">Welcome to <span className="text-[#ff5c35]">Eventron</span></h1>
+                  <p className="text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto mb-10">Sign in to discover and manage unforgettable events.</p>
+                  <button onClick={() => setIsAuthModalOpen(true)} className="px-8 py-4 bg-[#ff5c35] hover:bg-[#e04d2a] text-white rounded-full font-bold transition-all shadow-lg shadow-orange-900/20 text-sm uppercase tracking-widest">Sign In</button>
+                </div>
               </div>
-            </div>
+            )
           } />
-          <Route path="/explore" element={currentUser?.role === 'organizer' ? <Navigate to="/organizer" replace /> : renderEvents()} />
+          <Route path="/explore" element={currentUser?.role === 'organizer' ? <Navigate to="/organizer" replace /> : currentUser?.role === 'admin' ? <Navigate to="/admin" replace /> : renderEvents()} />
           <Route path="/browse" element={renderEvents()} />
           <Route path="/myticket" element={currentUser ? renderMyTickets() : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Please sign in to view your tickets.</div>} />
-          <Route path="/organizer" element={authLoading ? <div className="flex justify-center items-center py-40"><Loader2 className="w-10 h-10 animate-spin text-orange-500" /></div> : currentUser?.role === 'organizer' ? renderOrganizer() : <Navigate to="/explore" replace />} />
+          <Route path="/organizer" element={authLoading ? <div className="flex justify-center items-center py-40"><Loader2 className="w-10 h-10 animate-spin text-orange-500" /></div> : currentUser?.role === 'organizer' ? renderOrganizer() : currentUser?.role === 'admin' ? <Navigate to="/admin" replace /> : <Navigate to="/explore" replace />} />
           <Route path="/admin" element={
             <Suspense fallback={<div className="flex justify-center p-20"><Loader2 className="animate-spin text-orange-500" /></div>}>
               {currentUser?.role === 'admin' ? <AdminDashboard currentUser={currentUser} onLogout={handleLogout} /> : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Access Restricted</div>}

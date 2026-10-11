@@ -11,8 +11,8 @@ export interface GeminiStatusState {
 }
 
 import { Capacitor } from '@capacitor/core';
-const API_BASE = Capacitor.isNativePlatform() ? 'https://eventron.xyz' : '';
-const baseUrl = import.meta.env.PROD ? API_BASE : 'http://127.0.0.1:5005';
+const API_BASE = Capacitor.isNativePlatform() ? 'https://eventron.xyz' : (import.meta.env.VITE_API_URL || '');
+const baseUrl = API_BASE;
 
 let currentStatus: GeminiStatusState = {
   isConfigured: false,
@@ -104,17 +104,23 @@ if (typeof window !== 'undefined') {
 }
 
 export const generateEventDescription = async (title: string, date: string, location: string): Promise<string | null> => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
+
   try {
     const response = await fetch(`${baseUrl}/api/ai/describe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, date, location })
+      body: JSON.stringify({ title, date, location }),
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
     
     if (!response.ok) return null;
     const data = await response.json();
     return data.description || null;
   } catch (error) {
+    clearTimeout(timeoutId);
     console.error("Failed to generate description via backend:", error);
     return null;
   }
