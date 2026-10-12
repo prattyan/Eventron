@@ -55,6 +55,7 @@ export interface Event {
   minTeamSize?: number;
   isPaid?: boolean;
   price?: number;
+  pricingType?: 'overall' | 'per_person';
   promoCodes?: PromoCode[];
   organizerPaymentDetails?: {
     upiId?: string;
@@ -112,6 +113,7 @@ export interface Registration {
   teamId?: string;
   teamName?: string;
   isTeamLeader?: boolean;
+  pendingOrderId?: string;
 }
 
 export interface Team {

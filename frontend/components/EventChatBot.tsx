@@ -166,17 +166,42 @@ const EventChatBot: React.FC<EventChatBotProps> = ({ events, currentUserId }) =>
         let hasStartedStreaming = false;
 
         try {
-            // Prepare context from events
-            const context = events.map(e => ({
-                title: e.title,
-                date: e.date,
-                location: e.location,
-                description: e.description,
-                type: e.locationType || 'offline',
-                isPaid: e.isPaid,
-                price: e.price,
-                capacity: e.capacity
-            }));
+            // Prepare context with strict expiration filtering
+            const now = new Date();
+            const isEventPast = (e: Event) => {
+                const end = e.endDate ? new Date(e.endDate) : new Date(new Date(e.date).getTime() + 3600000);
+                return end < now;
+            };
+
+            const queryText = userMsg.text.toLowerCase();
+            const isExplicitlyAskingPast = /past|previous|history|ended|concluded|held|last month|last year|prior/i.test(queryText);
+
+            const upcomingEvents = events.filter(e => !isEventPast(e));
+            // Only send past events if the user explicitly asked about past events or mentioned an event title
+            const relevantPastEvents = events.filter(e => {
+                if (!isEventPast(e)) return false;
+                if (isExplicitlyAskingPast) return true;
+                return Boolean(e.title && e.title.length > 3 && queryText.includes(e.title.toLowerCase()));
+            });
+
+            const contextEvents = [...upcomingEvents, ...relevantPastEvents];
+
+            const context = contextEvents.map(e => {
+                const isPast = isEventPast(e);
+                return {
+                    title: e.title,
+                    date: e.date,
+                    endDate: e.endDate || e.date,
+                    location: e.location,
+                    description: e.description,
+                    type: e.locationType || 'offline',
+                    isPaid: e.isPaid,
+                    price: e.price,
+                    capacity: e.capacity,
+                    isPast,
+                    status: isPast ? 'concluded' : 'upcoming'
+                };
+            });
 
             await streamChatWithAI(userMsg.text, context, (_chunk, fullTextSoFar) => {
                 if (!hasStartedStreaming) {

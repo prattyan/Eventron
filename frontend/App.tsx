@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, Suspense, lazy, useRef } from 
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import QRCode from 'react-qr-code';
-import { Users, Sparkles, MapPin, ExternalLink, QrCode, ChevronRight, ChevronDown, Edit, Calendar, Clock, Plus, ScanLine, Filter, Download, Mail, Send, CheckCircle, XCircle, Menu, X, Ticket, Info, Trash2, Camera, RefreshCw, Smartphone, Shield, LogOut, Settings as Setting2, Layout, Bell, UserCircle, Search, MoreHorizontal, Check, AlertCircle, AlertTriangle, CheckSquare, MessageSquare, KeyRound, Share2, Facebook, Twitter, Linkedin, Copy, Star, CalendarPlus, Loader2, Image as ImageIcon, ChevronLeft, Link, Save, Upload, Tag, Lock } from 'lucide-react';
+import { Users, Sparkles, MapPin, ExternalLink, QrCode, ChevronRight, ChevronDown, Edit, Calendar, Clock, Plus, ScanLine, Filter, Download, Mail, Send, CheckCircle, XCircle, Menu, X, Ticket, Info, Trash2, Camera, RefreshCw, Smartphone, Shield, LogOut, Settings as Setting2, Layout, Bell, UserCircle, Search, MoreHorizontal, Check, AlertCircle, AlertTriangle, CheckSquare, MessageSquare, KeyRound, Share2, Facebook, Twitter, Linkedin, Copy, Star, CalendarPlus, Loader2, Image as ImageIcon, ChevronLeft, ArrowLeft, Link, Save, Upload, Tag, Lock } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import Cropper from 'react-easy-crop';
 import { format } from 'date-fns';
@@ -14,7 +14,7 @@ import {
   updateRegistrationStatus, markAttendance, deleteRegistration, deleteEvent, updateEventStatus,
   loginUser, registerUser, subscribeToAuth, logoutUser,
   loginWithGoogle, saveUserProfile, resetUserPassword,
-  createTeam, getTeamByInviteCode, joinTeam, getTeamsByEventId, getTeamById,
+  createTeam, getTeamByInviteCode, joinTeam, getTeamsByEventId, getTeamById, deleteTeam, removeMemberFromTeam,
   getNotifications, addNotification, markNotificationRead, markAllNotificationsRead,
   getMessages, addMessage, getReviews, addReview, deleteAccount, getEventById, getEventImage, getInitialData,
   initRecaptcha, signInWithPhone, verifyPhoneOtp, checkPhoneNumberExists, getUserProfile, getVectorRecommendations,
@@ -464,6 +464,26 @@ export default function App() {
     }
   }, [location.pathname]);
 
+  // Prevent browser from retaining scroll position across SPA transitions
+  useEffect(() => {
+    if ('scrollRestoration' in window.history) {
+      window.history.scrollRestoration = 'manual';
+    }
+  }, []);
+
+  // Automatically scroll to the top of the page when navigating between routes or tabs
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    const rId = requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    });
+    return () => cancelAnimationFrame(rId);
+  }, [location.pathname, activeTab]);
+
   // Reset CAPTCHA whenever the user switches auth mode
   useEffect(() => {
     setCaptchaVerified(false);
@@ -471,6 +491,9 @@ export default function App() {
   }, [isAuthMode]);
 
   const handleTabChange = (tab: string) => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
     if (tab === 'browse') navigate('/explore');
     else if (tab === 'my-tickets') navigate('/myticket');
     else navigate(`/${tab}`);
@@ -494,7 +517,7 @@ export default function App() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [messages, setMessages] = useState<any[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
-  const [dataLoading, setDataLoading] = useState(false);
+  const [dataLoading, setDataLoading] = useState(true);
   const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -626,12 +649,12 @@ export default function App() {
   const [newEvent, setNewEvent] = useState<{
     title: string; date: string; endDate: string; location: string; locationType: 'online' | 'offline'; description: string; capacity: string; imageUrl: string; customQuestions: CustomQuestion[]; collaboratorEmails: string[]; tags: string[];
     participationMode: ParticipationMode; maxTeamSize: string; minTeamSize: string;
-    isPaid: boolean; price: string; promoCodes: PromoCode[];
+    isPaid: boolean; price: string; pricingType: 'overall' | 'per_person'; promoCodes: PromoCode[];
     organizerPaymentDetails?: { upiId?: string; bankDetails?: { accountNumber: string; ifsc: string; accountName: string; }; };
   }>({
     title: '', date: '', endDate: '', location: '', locationType: 'offline', description: '', capacity: '', imageUrl: '', customQuestions: [], collaboratorEmails: [], tags: [],
     participationMode: 'individual', maxTeamSize: '5', minTeamSize: '2',
-    isPaid: false, price: '', promoCodes: [],
+    isPaid: false, price: '', pricingType: 'overall', promoCodes: [],
     organizerPaymentDetails: undefined
   });
   const [promoCodeInput, setPromoCodeInput] = useState<{ code: string; type: 'percentage' | 'fixed'; value: string; limit: string }>({ code: '', type: 'percentage', value: '', limit: '' });
@@ -682,9 +705,14 @@ export default function App() {
           setActiveTab('browse');
         }
         loadData();
-        // Close auth modal and navigate away from landing page on any successful auth
+        // Close auth modal and navigate away from landing page or to role-specific dashboard
         setIsAuthModalOpen(false);
-        if (window.location.pathname === '/' || window.location.pathname === '') {
+        if (
+          window.location.pathname === '/' ||
+          window.location.pathname === '' ||
+          (user.role === 'admin' && window.location.pathname !== '/admin') ||
+          (user.role === 'organizer' && (window.location.pathname === '/explore' || window.location.pathname === '/browse'))
+        ) {
           navigateByRole(user);
         }
       } else {
@@ -705,6 +733,14 @@ export default function App() {
       window.removeEventListener('scroll', handleScroll);
     };
   }, []);
+
+  // Strict route guard: ensure Admin always stays on /admin
+  useEffect(() => {
+    if (currentUser?.role === 'admin' && location.pathname !== '/admin') {
+      setActiveTab('admin');
+      navigate('/admin', { replace: true });
+    }
+  }, [currentUser?.role, location.pathname, navigate]);
 
   // Socket.io Listener
   useEffect(() => {
@@ -784,6 +820,24 @@ export default function App() {
   const [isVerifyingProfilePhoneOtp, setIsVerifyingProfilePhoneOtp] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [cropPurpose, setCropPurpose] = useState<'event' | 'profile'>('event'); // Track what we are cropping
+
+  // Auto-sync profile form state whenever currentUser changes (handles direct navigation to /edit-page)
+  useEffect(() => {
+    if (currentUser) {
+      setProfileForm({
+        name: currentUser.name || '',
+        email: currentUser.email || '',
+        phoneNumber: currentUser.phoneNumber || '',
+        isPhoneVerified: !!currentUser.phoneNumber,
+        avatarUrl: currentUser.avatarUrl
+      });
+      if (currentUser.phoneNumber) {
+        const parsed = splitPhoneNumber(currentUser.phoneNumber);
+        setProfileDialCode(parsed.dialCode);
+        setProfileNationalNumber(parsed.nationalNumber);
+      }
+    }
+  }, [currentUser]);
 
   // Lock body scroll when any modal is open
   useEffect(() => {
@@ -982,6 +1036,93 @@ export default function App() {
   }, [currentUser]);
 
   const handleCancelRegistration = async (registrationId: string) => {
+    const targetReg = registrations.find(r => r.id === registrationId);
+    if (!targetReg) return;
+
+    const event = events.find(e => e.id === targetReg.eventId);
+    const isTeamReg = targetReg.participationType === 'team' && !!targetReg.teamId;
+    const isLeader = Boolean(targetReg.isTeamLeader);
+    const teamId = targetReg.teamId;
+
+    if (isTeamReg && isLeader && teamId) {
+      // Option A: Team Leader Cancellation Flow
+      const teamRegs = registrations.filter(r => r.teamId === teamId && r.status !== RegistrationStatus.REJECTED);
+      const teamObj = teams.find(t => t.id === teamId);
+      const teamName = targetReg.teamName || teamObj?.name || 'Your Team';
+      const membersCount = Math.max(teamRegs.length, teamObj?.members?.length || 1);
+      const otherMembersCount = Math.max(0, membersCount - 1);
+
+      const confirmMsg = otherMembersCount > 0
+        ? `⚠️ You are the Team Leader of "${teamName}".\n\nCancelling your registration will DISBAND the entire team and cancel registrations for the other ${otherMembersCount} team member${otherMembersCount !== 1 ? 's' : ''}.\n\nAre you sure you want to cancel and disband the team?`
+        : `Are you sure you want to cancel your team registration for "${event?.title || 'this event'}"?`;
+
+      if (!window.confirm(confirmMsg)) return;
+
+      setIsRegistering(true);
+      try {
+        // 1. Notify team members about team disbandment
+        for (const memberReg of teamRegs) {
+          if (memberReg.id !== targetReg.id) {
+            await addNotification({
+              userId: memberReg.participantId,
+              title: `Team "${teamName}" Disbanded ⚠️`,
+              message: `Your team leader (${targetReg.participantName}) cancelled their registration for "${event?.title || 'the event'}". The team has been disbanded. You may now register again individually or with a new team.`,
+              type: 'warning',
+              link: 'explore'
+            });
+          }
+        }
+
+        // 2. Delete all registrations in this team
+        await Promise.all(teamRegs.map(r => deleteRegistration(r.id)));
+
+        // 3. Delete team record from database
+        await deleteTeam(teamId);
+
+        addToast(`Team "${teamName}" disbanded and registrations cancelled.`, 'success');
+        await loadData(true);
+      } catch (error) {
+        console.error('Team cancellation error:', error);
+        addToast('Failed to cancel team registration', 'error');
+      } finally {
+        setIsRegistering(false);
+      }
+      return;
+    }
+
+    if (isTeamReg && !isLeader && teamId) {
+      // Normal team member leaving the team
+      if (!window.confirm(`Are you sure you want to leave team "${targetReg.teamName || 'your team'}" and cancel your registration?`)) return;
+
+      setIsRegistering(true);
+      try {
+        await deleteRegistration(registrationId);
+        await removeMemberFromTeam(teamId, currentUser?.id || targetReg.participantEmail);
+
+        // Notify team leader that member left
+        const leaderReg = registrations.find(r => r.teamId === teamId && r.isTeamLeader);
+        if (leaderReg) {
+          await addNotification({
+            userId: leaderReg.participantId,
+            title: `Team Member Left 👥`,
+            message: `${targetReg.participantName} has left your team "${targetReg.teamName || 'Team'}" for "${event?.title || 'the event'}".`,
+            type: 'info',
+            link: 'my-tickets'
+          });
+        }
+
+        addToast('You have left the team and cancelled your registration.', 'success');
+        await loadData(true);
+      } catch (error) {
+        console.error('Member leave error:', error);
+        addToast('Failed to cancel registration', 'error');
+      } finally {
+        setIsRegistering(false);
+      }
+      return;
+    }
+
+    // Individual participant cancellation
     if (!window.confirm('Are you sure you want to cancel your registration for this event?')) return;
 
     try {
@@ -1477,7 +1618,7 @@ export default function App() {
     setNewEvent({
       title: '', date: '', endDate: '', location: '', locationType: 'offline', description: '', capacity: '', imageUrl: '', customQuestions: [], collaboratorEmails: [], tags: [],
       participationMode: 'individual', maxTeamSize: '5', minTeamSize: '2',
-      isPaid: false, price: '', promoCodes: [],
+      isPaid: false, price: '', pricingType: 'overall', promoCodes: [],
       organizerPaymentDetails: undefined
     });
     setIsEditMode(false);
@@ -1519,6 +1660,7 @@ export default function App() {
       minTeamSize: fullEvent.minTeamSize?.toString() || '2',
       isPaid: Boolean(fullEvent.isPaid),
       price: fullEvent.price?.toString() || '',
+      pricingType: fullEvent.pricingType || 'overall',
       promoCodes: fullEvent.promoCodes || [],
       organizerPaymentDetails: fullEvent.organizerPaymentDetails
     });
@@ -1570,6 +1712,7 @@ export default function App() {
         minTeamSize: parseInt(newEvent.minTeamSize) || 0,
         isPaid: newEvent.isPaid,
         price: newEvent.isPaid ? parseFloat(newEvent.price) : 0,
+        pricingType: newEvent.pricingType || 'overall',
         promoCodes: newEvent.promoCodes,
         organizerPaymentDetails: newEvent.organizerPaymentDetails
       };
@@ -1887,69 +2030,197 @@ export default function App() {
     }
   };
 
-  const handleStatusUpdate = async (regId: string, status: RegistrationStatus) => {
-    // Check if this is a paid event and we are trying to approve it without payment
-    const reg = registrations.find(r => r.id === regId);
-    if (!reg) return;
-    const event = events.find(e => e.id === reg?.eventId);
+  const getEventTotalAmount = (event: AppEvent | undefined, participationType?: string, teamId?: string): number => {
+    if (!event || !event.isPaid) return 0;
+    const basePrice = Number(event.price || 0);
+    if (participationType === 'team' && teamId && event.pricingType === 'per_person') {
+      const teamRegs = registrations.filter(r => r.teamId === teamId && r.status !== RegistrationStatus.REJECTED);
+      const teamObj = teams.find(t => t.id === teamId);
+      const count = Math.max(teamRegs.length, teamObj?.members?.length || 1);
+      return basePrice * count;
+    }
+    return basePrice;
+  };
+
+  const handleTeamStatusUpdate = async (teamId: string, status: RegistrationStatus) => {
+    const teamRegs = registrations.filter(r => r.teamId === teamId);
+    if (teamRegs.length === 0) return;
+
+    const event = events.find(e => e.id === teamRegs[0].eventId);
+    const minSize = event?.minTeamSize || 1;
+    const maxSize = event?.maxTeamSize || 99;
+    const membersCount = teamRegs.length;
+    const teamName = teamRegs[0].teamName || 'Team';
+
+    // Verify team size range when approving
+    if (status === RegistrationStatus.APPROVED) {
+      if (membersCount < minSize) {
+        addToast(`Cannot approve team. Minimum team size is ${minSize} members (currently ${membersCount}).`, 'error');
+        return;
+      }
+      if (membersCount > maxSize) {
+        addToast(`Cannot approve team. Maximum team size is ${maxSize} members (currently ${membersCount}).`, 'error');
+        return;
+      }
+    }
+
+    const isPaidEvent = Boolean(event && (event.isPaid || (event.price && Number(event.price) > 0)));
+    const leaderReg = teamRegs.find(r => r.isTeamLeader) || teamRegs[0];
+    const totalTeamFee = getEventTotalAmount(event, 'team', teamId);
 
     let finalStatus = status;
-    const isPaidEvent = event && (event.isPaid || (event.price && Number(event.price) > 0));
+    if (status === RegistrationStatus.APPROVED && isPaidEvent) {
+      const isPaid = leaderReg?.paymentDetails?.status === PaymentStatus.COMPLETED;
+      if (!isPaid) {
+        finalStatus = RegistrationStatus.AWAITING_PAYMENT;
+      }
+    }
+
+    const pricingNote = event?.pricingType === 'per_person'
+      ? `(₹${event.price || 0} × ${membersCount} members = ₹${totalTeamFee})`
+      : `(₹${totalTeamFee} flat fee)`;
+
+    const confirmMessage = finalStatus === RegistrationStatus.APPROVED
+      ? `Approve entire team "${teamName}" (${membersCount} members)?`
+      : finalStatus === RegistrationStatus.AWAITING_PAYMENT
+      ? `Approve team "${teamName}" (${membersCount} members) and request total payment of ₹${totalTeamFee} ${pricingNote}?`
+      : `Reject entire team "${teamName}" (${membersCount} members)?`;
+
+    if (!confirm(confirmMessage)) return;
+
+    setIsRegistering(true);
+    try {
+      // 1. Update Database for all team registrations together
+      await Promise.all(teamRegs.map(r => updateRegistrationStatus(r.id, finalStatus)));
+
+      // 2. Send in-app notification to all team members
+      for (const targetReg of teamRegs) {
+        if (event) {
+          let title = 'Registration Update';
+          let message = `Your team "${teamName}" status has been updated to ${finalStatus}.`;
+          let type: 'info' | 'success' | 'warning' = 'info';
+
+          if (finalStatus === RegistrationStatus.APPROVED) {
+            title = 'Team Registration Approved! 🎉';
+            message = `Your team "${teamName}" has been approved for "${event.title}"!`;
+            type = 'success';
+          } else if (finalStatus === RegistrationStatus.AWAITING_PAYMENT) {
+            title = 'Team Approved: Payment Required 🎟️';
+            message = `Your team "${teamName}" was approved for "${event.title}". Team leader must complete total payment of ₹${totalTeamFee} to confirm your spots.`;
+            type = 'warning';
+          } else if (finalStatus === RegistrationStatus.REJECTED) {
+            title = 'Team Registration Rejected';
+            message = `Your team "${teamName}" registration for "${event.title}" has been rejected.`;
+            type = 'warning';
+          }
+
+          await addNotification({
+            userId: targetReg.participantId,
+            title,
+            message,
+            type,
+            link: 'my-tickets'
+          });
+        }
+      }
+
+      // 3. Send email to TEAM LEADER via SMTP!
+      if (event && leaderReg && (finalStatus === RegistrationStatus.APPROVED || finalStatus === RegistrationStatus.AWAITING_PAYMENT)) {
+        await sendStatusUpdateEmail(
+          leaderReg.participantEmail,
+          leaderReg.participantName,
+          event.title,
+          finalStatus,
+          {
+            isTeam: true,
+            teamName,
+            membersCount,
+            isPaid: isPaidEvent,
+            price: totalTeamFee,
+            eventDate: event.date ? format(new Date(event.date), 'PPP p') : '',
+            eventLocation: event.location || ''
+          }
+        );
+      }
+
+      addToast(
+        finalStatus === RegistrationStatus.APPROVED
+          ? `Team "${teamName}" approved! Approval email sent to team leader (${leaderReg.participantEmail}).`
+          : finalStatus === RegistrationStatus.AWAITING_PAYMENT
+          ? `Team "${teamName}" approved! Payment notice emailed to team leader (${leaderReg.participantEmail}).`
+          : `Team "${teamName}" rejected.`,
+        finalStatus === RegistrationStatus.REJECTED ? 'info' : 'success'
+      );
+
+      await loadData();
+    } catch (err) {
+      console.error("Team approval error:", err);
+      addToast("Failed to update team registration status", "error");
+    } finally {
+      setIsRegistering(false);
+    }
+  };
+
+  const handleStatusUpdate = async (regId: string, status: RegistrationStatus) => {
+    const reg = registrations.find(r => r.id === regId);
+    if (!reg) return;
+
+    // For team registrations, always enforce team-wise approval
+    if (reg.participationType === 'team' && reg.teamId) {
+      return handleTeamStatusUpdate(reg.teamId, status);
+    }
+
+    const event = events.find(e => e.id === reg?.eventId);
+    let finalStatus = status;
+    const isPaidEvent = Boolean(event && (event.isPaid || (event.price && Number(event.price) > 0)));
 
     if (status === RegistrationStatus.APPROVED && isPaidEvent) {
-      // If event is paid, check if payment is already done
       const isPaid = reg?.paymentDetails?.status === PaymentStatus.COMPLETED;
       if (!isPaid) {
         finalStatus = RegistrationStatus.AWAITING_PAYMENT;
       }
     }
 
-    // Check if this registration belongs to a team
-    // If leader's approval is done, all team members get approval
-    const isTeamReg = reg.participationType === 'team' && reg.teamId;
-    const teamRegs = isTeamReg ? registrations.filter(r => r.teamId === reg.teamId) : [reg];
+    await updateRegistrationStatus(reg.id, finalStatus);
 
-    // 1. Update Database for all team registrations
-    await Promise.all(teamRegs.map(r => updateRegistrationStatus(r.id, finalStatus)));
+    if (event) {
+      let title = 'Registration Update';
+      let message = `Your registration status for "${event.title}" has been updated to ${finalStatus}.`;
+      let type: 'info' | 'success' | 'warning' = 'info';
 
-    // 2. Send Notification to all updated participants
-    for (const targetReg of teamRegs) {
-      if (event) {
-        let title = 'Registration Update';
-        let message = `Your registration status for "${event.title}" has been updated to ${finalStatus}.`;
-        let type: 'info' | 'success' | 'warning' = 'info';
-
-        if (finalStatus === RegistrationStatus.APPROVED) {
-          title = 'Registration Approved!';
-          message = isTeamReg
-            ? `Your team "${targetReg.teamName || 'Team'}" has been approved for "${event.title}"!`
-            : `You're in! Your registration for "${event.title}" was approved.`;
-          type = 'success';
-        } else if (finalStatus === RegistrationStatus.AWAITING_PAYMENT) {
-          title = 'Action Required: Payment';
-          message = `Your registration for "${event.title}" is tentatively approved. Please proceed to payment to confirm your spot.`;
-          type = 'warning';
-        } else if (finalStatus === RegistrationStatus.REJECTED) {
-          title = 'Registration Rejected';
-          message = `Your registration for "${event.title}" has been rejected.`;
-          type = 'warning';
-        }
-
-        await sendStatusUpdateEmail(targetReg.participantEmail, targetReg.participantName, event.title, finalStatus);
-
-        await addNotification({
-          userId: targetReg.participantId,
-          title: title,
-          message: message,
-          type: type,
-          link: 'my-tickets'
-        });
+      if (finalStatus === RegistrationStatus.APPROVED) {
+        title = 'Registration Approved! 🎉';
+        message = `You're in! Your registration for "${event.title}" was approved.`;
+        type = 'success';
+      } else if (finalStatus === RegistrationStatus.AWAITING_PAYMENT) {
+        title = 'Action Required: Payment 🎟️';
+        message = `Your registration for "${event.title}" is tentatively approved. Please proceed to payment to confirm your spot.`;
+        type = 'warning';
+      } else if (finalStatus === RegistrationStatus.REJECTED) {
+        title = 'Registration Rejected';
+        message = `Your registration for "${event.title}" has been rejected.`;
+        type = 'warning';
       }
+
+      await sendStatusUpdateEmail(reg.participantEmail, reg.participantName, event.title, finalStatus, {
+        isTeam: false,
+        isPaid: isPaidEvent,
+        price: Number(event.price || 0),
+        eventDate: event.date ? format(new Date(event.date), 'PPP p') : '',
+        eventLocation: event.location || ''
+      });
+
+      await addNotification({
+        userId: reg.participantId,
+        title,
+        message,
+        type,
+        link: 'my-tickets'
+      });
     }
 
-    // 3. Refresh Data
     await loadData();
-    addToast(isTeamReg ? `Team "${reg.teamName || 'Team'}" updated to ${finalStatus}` : `Participant status updated to ${finalStatus}`, 'success');
+    addToast(`Participant status updated to ${finalStatus}`, 'success');
   };
 
   const handleLatePayment = (reg: Registration, event: AppEvent) => {
@@ -1968,8 +2239,8 @@ export default function App() {
     setIsPaymentProcessing(true);
     const { reg, event } = selectedRegForPayment;
 
-    // Calculate Final Amount
-    let amount = Number(event.price || 0);
+    // Calculate Final Amount using overall or per-person team size
+    let amount = getEventTotalAmount(event, reg.participationType, reg.teamId);
 
     if (paymentAppliedPromo) {
       if (paymentAppliedPromo.type === 'percentage') {
@@ -2001,6 +2272,62 @@ export default function App() {
     }
 
     try {
+      // 1. Check in Cashfree whether user has ALREADY paid for this event
+      try {
+        const pendingOrderHint = localStorage.getItem(`pending_order_${reg.id}`) || reg.pendingOrderId || reg.paymentDetails?.orderId;
+        const checkRes = await fetch(`${API_BASE}/api/check-payment-status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            registrationId: reg.id,
+            eventId: event.id,
+            userId: currentUser?.id,
+            teamId: reg.teamId,
+            orderId: pendingOrderHint
+          })
+        });
+        const checkData = await checkRes.json();
+
+        if (checkData.success && checkData.already_paid) {
+          // ALREADY PAID! Make transaction successful without proceeding to payment page
+          const paidAmount = Number(checkData.amount || amount);
+          const paymentInfo = {
+            paymentDetails: {
+              status: PaymentStatus.COMPLETED,
+              amount: paidAmount,
+              currency: checkData.currency || 'INR',
+              transactionId: checkData.order_id,
+              orderId: checkData.order_id,
+              promocodeApplied: paymentAppliedPromo?.code
+            }
+          };
+
+          if (reg.participationType === 'team' && reg.teamId) {
+            const teamRegs = registrations.filter(r => r.teamId === reg.teamId);
+            await Promise.all(teamRegs.map(r => updateRegistrationStatus(r.id, RegistrationStatus.APPROVED, r.id === reg.id ? paymentInfo : undefined)));
+          } else {
+            await updateRegistrationStatus(reg.id, RegistrationStatus.APPROVED, paymentInfo);
+          }
+
+          try {
+            localStorage.removeItem(`pending_order_${reg.id}`);
+          } catch (_) {}
+
+          addToast("Payment already verified from Cashfree! Ticket confirmed.", "success");
+          await loadData(true);
+          setIsPaymentSuccess(true);
+          setTimeout(() => {
+            setIsPaymentModalOpen(false);
+            setIsPaymentProcessing(false);
+            setIsPaymentSuccess(false);
+            navigate('/myticket');
+          }, 1500);
+          return; // DO NOT PROCEED TO PAYMENT PAGE!
+        }
+      } catch (checkErr) {
+        console.warn("Could not check already-paid status in Cashfree:", checkErr);
+      }
+
       const loaded = await loadCashfree();
       if (!loaded) {
         addToast('Cashfree SDK failed to load', 'error');
@@ -2008,7 +2335,7 @@ export default function App() {
         return;
       }
 
-      // Create Order
+      // 2. Not paid yet: Create Order and proceed to payment page
       const baseUrl = API_BASE;
       const orderRes = await fetch(`${baseUrl}/api/create-payment-order`, {
         method: 'POST',
@@ -2021,6 +2348,7 @@ export default function App() {
             eventId: event.id,
             userId: currentUser?.id,
             registrationId: reg.id,
+            teamId: reg.teamId,
             promoCode: paymentAppliedPromo?.code
           }
         })
@@ -2032,6 +2360,12 @@ export default function App() {
         setIsPaymentProcessing(false);
         return;
       }
+
+      // Save pending order so it can be verified if internet disconnects
+      try {
+        localStorage.setItem(`pending_order_${reg.id}`, orderData.order_id);
+      } catch (_) {}
+      updateRegistrationStatus(reg.id, reg.status, { pendingOrderId: orderData.order_id } as any);
 
       const cashfreeMode = (import.meta.env.VITE_CASHFREE_ENV || 'SANDBOX').toLowerCase();
       const cashfree = await (window as any).Cashfree({ mode: cashfreeMode }); 
@@ -2088,6 +2422,11 @@ export default function App() {
           } else {
             await updateRegistrationStatus(reg.id, RegistrationStatus.APPROVED, paymentInfo);
           }
+
+          try {
+            localStorage.removeItem(`pending_order_${reg.id}`);
+          } catch (_) {}
+
           addToast("Payment successful! Ticket confirmed.", "success");
           loadData();
           setIsPaymentSuccess(true);
@@ -3035,7 +3374,7 @@ export default function App() {
                                 }
                               }
                               if (notif.link) {
-                                setActiveTab(notif.link as Tab);
+                                handleTabChange(notif.link as Tab);
                                 setIsNotificationsOpen(false);
                               }
                             }}
@@ -3134,9 +3473,8 @@ export default function App() {
                               setOtp('');
                               setOtpPurpose('profile');
                               setShowOtpInput(false);
-                              setConfirmationResult(null);
-                              setIsProfileModalOpen(true);
                               setIsProfileMenuOpen(false);
+                              navigate('/edit-page');
                             }}
 
                             className="w-full text-left px-4 py-3 text-sm font-bold font-outfit text-slate-300 hover:bg-orange-600 hover:text-white rounded-xl transition-all flex items-center gap-3 group"
@@ -3393,7 +3731,7 @@ export default function App() {
                   onClick={() => {
                     setOrganizerSelectedEventId(event.id);
                     setOrganizerView('events');
-                    setActiveTab('organizer');
+                    handleTabChange('organizer');
                   }}
                   className="flex-1 bg-orange-600/10 text-orange-400 font-bold font-outfit py-3 rounded-2xl border border-orange-500/20 hover:bg-orange-600 hover:text-white transition-all shadow-sm"
                 >
@@ -3453,7 +3791,11 @@ export default function App() {
             ))}
           </div>
 
-          {!dataLoading && upcomingEvents.length === 0 ? (
+          {dataLoading ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
+              {Array(6).fill(0).map((_, i) => <EventCardSkeleton key={i} />)}
+            </div>
+          ) : upcomingEvents.length === 0 ? (
             <div className="text-center py-16 sm:py-32 glass-card rounded-[40px] border-dashed border-2 border-white/5">
               <div className="w-24 h-24 bg-orange-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
                 <Calendar className="w-12 h-12 text-orange-500 opacity-50" />
@@ -3471,11 +3813,7 @@ export default function App() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
-              {dataLoading ? (
-                Array(6).fill(0).map((_, i) => <EventCardSkeleton key={i} />)
-              ) : (
-                upcomingEvents.map((event, idx) => renderEventCard(event, idx))
-              )}
+              {upcomingEvents.map((event, idx) => renderEventCard(event, idx))}
             </div>
           )}
 
@@ -3565,20 +3903,58 @@ export default function App() {
                 <QrCode className="w-4 h-4" /> View Digital Ticket
               </button>
             )}
+            {reg.status === RegistrationStatus.AWAITING_PAYMENT && !isPast && (
+              (reg.participationType === 'team' && !reg.isTeamLeader) ? (
+                <div className="w-full text-center px-4 py-3 bg-slate-800/80 border border-slate-700 rounded-2xl text-xs font-bold text-amber-400 font-outfit">
+                  Waiting for Team Leader Payment
+                </div>
+              ) : (
+                <button
+                  onClick={() => handleLatePayment(reg, event)}
+                  className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-6 rounded-2xl text-xs uppercase tracking-wider transition-all shadow-lg shadow-orange-600/20 active:scale-95"
+                >
+                  Pay to Confirm
+                </button>
+              )
+            )}
+            {reg.status !== RegistrationStatus.AWAITING_PAYMENT && reg.status !== RegistrationStatus.APPROVED && (
+              <button
+                onClick={() => setSelectedRegistrationDetails(reg)}
+                className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-6 py-2.5 rounded-2xl text-xs font-bold font-outfit transition-all uppercase tracking-wider flex items-center justify-center gap-2"
+              >
+                <Users className="w-3.5 h-3.5 text-orange-400" />
+                {reg.participationType === 'team' ? 'Team & Registration' : 'View Registration'}
+              </button>
+            )}
+            {reg.participationType === 'team' && reg.isTeamLeader && reg.status === RegistrationStatus.TEAM_AWAITING_SUBMISSION && !isPast && (
+              (() => {
+                const teamObj = teams.find(t => t.id === reg.teamId);
+                const teamRegs = registrations.filter(r => r.teamId === reg.teamId && r.status !== RegistrationStatus.REJECTED);
+                const membersCount = Math.max(teamRegs.length, teamObj?.members?.length || 0);
+                const minSize = event?.minTeamSize || 1;
+                const isIncomplete = membersCount < minSize;
+                return (
+                  <button
+                    disabled={isIncomplete}
+                    onClick={() => reg.teamId && handleTeamSubmit(reg.teamId)}
+                    className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold font-outfit uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-md ${
+                      isIncomplete
+                        ? 'bg-slate-800 text-slate-500 border border-slate-700/60 cursor-not-allowed'
+                        : 'bg-orange-600 hover:bg-orange-700 text-white shadow-orange-600/20 active:scale-95'
+                    }`}
+                  >
+                    {isIncomplete ? <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> : <CheckCircle className="w-3.5 h-3.5" />}
+                    {isIncomplete ? `Team Incomplete (${membersCount}/${minSize})` : 'Submit Team'}
+                  </button>
+                );
+              })()
+            )}
             <button
               onClick={() => setSelectedEventForDetails(event)}
               className="text-[10px] font-black text-slate-500 hover:text-white uppercase tracking-[0.3em] transition-colors"
             >
               Event Details
             </button>
-            {reg.status === RegistrationStatus.AWAITING_PAYMENT && !isPast && (
-              <button
-                onClick={() => handleLatePayment(reg, event)}
-                className="mt-3 w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 rounded-xl text-xs uppercase tracking-wider transition-all shadow-lg shadow-orange-600/20"
-              >
-                Pay to Confirm
-              </button>
-            )}
             {!isPast && (
               <button
                 onClick={() => handleCancelRegistration(reg.id)}
@@ -3622,7 +3998,7 @@ export default function App() {
             <h3 className="text-2xl font-black font-outfit text-white mb-2">No tickets yet</h3>
             <p className="text-slate-400 mb-8 max-w-xs mx-auto">Your journey begins when you register for your first event.</p>
             <button
-              onClick={() => setActiveTab('browse')}
+              onClick={() => handleTabChange('browse')}
               className="bg-orange-600 text-white px-10 py-4 rounded-2xl font-black font-outfit hover:bg-orange-700 transition-all uppercase tracking-widest shadow-xl shadow-orange-600/20"
             >
               Explore Events
@@ -3699,7 +4075,12 @@ export default function App() {
             </button>
           </div>
 
-          {organizerView === 'overview' ? (
+          {dataLoading ? (
+            <div className="flex flex-col items-center justify-center py-24">
+              <Loader2 className="w-10 h-10 text-orange-500 animate-spin mb-4" />
+              <p className="text-slate-400 font-medium font-outfit">Loading command center data...</p>
+            </div>
+          ) : organizerView === 'overview' ? (
             <Suspense fallback={<div className="flex justify-center py-20"><Loader2 className="w-10 h-10 text-orange-500 animate-spin" /></div>}>
               <AnalyticsDashboard
                 events={myEvents}
@@ -3707,12 +4088,7 @@ export default function App() {
               />
             </Suspense>
           ) : (
-            dataLoading ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {[1, 2, 3, 4, 5, 6].map(i => <EventCardSkeleton key={i} />)}
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                 {myEvents.map(event => {
                   const eventRegs = registrations.filter(r => r.eventId === event.id);
                   const pendingCount = eventRegs.filter(r => r.status === RegistrationStatus.PENDING).length;
@@ -3817,7 +4193,7 @@ export default function App() {
                 )}
               </div>
             )
-          )}
+          }
         </div>
       );
     }
@@ -3848,6 +4224,8 @@ export default function App() {
         groupedRegs.push({ teamId: null, teamName: null, regs: [reg] });
       }
     });
+
+    const totalColumns = event?.isPaid ? 9 : 7;
 
     return (
       <div className="max-w-7xl mx-auto px-4 pt-32 pb-16">
@@ -3965,11 +4343,19 @@ export default function App() {
             <div className="flex items-center gap-2">
               <button
                 onClick={async () => {
-                  if (confirm(`Approve ${selectedRegistrationIds.length} registrations?`)) {
-                    await Promise.all(selectedRegistrationIds.map(id => updateRegistrationStatus(id, RegistrationStatus.APPROVED)));
-                    addToast(`Approved ${selectedRegistrationIds.length} participants`, 'success');
+                  const hasTeam = selectedRegistrationIds.some(id => {
+                    const r = registrations.find(reg => reg.id === id);
+                    return r?.participationType === 'team';
+                  });
+                  if (hasTeam) {
+                    addToast('Team registrations must be approved team-wise using the team header button.', 'warning');
+                    return;
+                  }
+                  if (confirm(`Approve ${selectedRegistrationIds.length} individual registrations?`)) {
+                    for (const id of selectedRegistrationIds) {
+                      await handleStatusUpdate(id, RegistrationStatus.APPROVED);
+                    }
                     setSelectedRegistrationIds([]);
-                    loadData();
                   }
                 }}
                 className="bg-green-600 hover:bg-green-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
@@ -3978,11 +4364,19 @@ export default function App() {
               </button>
               <button
                 onClick={async () => {
-                  if (confirm(`Reject ${selectedRegistrationIds.length} registrations?`)) {
-                    await Promise.all(selectedRegistrationIds.map(id => updateRegistrationStatus(id, RegistrationStatus.REJECTED)));
-                    addToast(`Rejected ${selectedRegistrationIds.length} participants`, 'info');
+                  const hasTeam = selectedRegistrationIds.some(id => {
+                    const r = registrations.find(reg => reg.id === id);
+                    return r?.participationType === 'team';
+                  });
+                  if (hasTeam) {
+                    addToast('Team registrations must be rejected team-wise using the team header button.', 'warning');
+                    return;
+                  }
+                  if (confirm(`Reject ${selectedRegistrationIds.length} individual registrations?`)) {
+                    for (const id of selectedRegistrationIds) {
+                      await handleStatusUpdate(id, RegistrationStatus.REJECTED);
+                    }
                     setSelectedRegistrationIds([]);
-                    loadData();
                   }
                 }}
                 className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
@@ -4028,24 +4422,51 @@ export default function App() {
                         <Users className="w-4 h-4 text-orange-400" />
                         <span className="text-xs font-black uppercase tracking-widest text-orange-400">{group.teamName}</span>
                       </div>
-                      {group.regs.every(r => r.status === RegistrationStatus.PENDING) && (
+                      {group.regs.some(r => r.status === RegistrationStatus.PENDING || r.status === RegistrationStatus.TEAM_AWAITING_SUBMISSION) && (
                         (() => {
                           const minSize = event?.minTeamSize || 1;
-                          const isUnderSize = group.regs.length < minSize;
+                          const maxSize = event?.maxTeamSize || 99;
+                          const count = group.regs.length;
+                          const isUnderSize = count < minSize;
+                          const isOverSize = count > maxSize;
+                          const isAwaitingSubmission = group.regs.some(r => r.status === RegistrationStatus.TEAM_AWAITING_SUBMISSION);
+                          const canApprove = !isUnderSize && !isOverSize && !isAwaitingSubmission;
                           return (
-                            <button
-                              disabled={isUnderSize}
-                              onClick={async () => {
-                                if (confirm(`Approve entire team "${group.teamName}"?`)) {
-                                  await Promise.all(group.regs.map(r => updateRegistrationStatus(r.id, RegistrationStatus.APPROVED)));
-                                  addToast(`Team "${group.teamName}" approved!`, 'success');
-                                  loadData();
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                disabled={!canApprove}
+                                onClick={() => handleTeamStatusUpdate(group.teamId!, RegistrationStatus.APPROVED)}
+                                title={
+                                  isAwaitingSubmission
+                                    ? `Team is still being formed. Awaiting team leader submission (${count} joined)`
+                                    : isUnderSize
+                                    ? `Team requires ${minSize}–${maxSize} members before approval (Current: ${count})`
+                                    : isOverSize
+                                    ? `Team exceeds max capacity of ${maxSize} members`
+                                    : `Approve team "${group.teamName}"`
                                 }
-                              }}
-                              className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-lg transition-all ${isUnderSize ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed' : 'bg-green-600 text-white shadow-lg'}`}
-                            >
-                              {isUnderSize ? `Under-sized (${group.regs.length}/${minSize})` : 'Approve Team'}
-                            </button>
+                                className={`text-[10px] font-black uppercase tracking-wider px-3 py-1 rounded-lg border transition-all ${
+                                  !canApprove
+                                    ? 'bg-slate-800 text-amber-400/80 border-amber-500/30 cursor-not-allowed'
+                                    : 'bg-green-600/20 text-green-400 border-green-500/40 hover:bg-green-600 hover:text-white cursor-pointer shadow-sm'
+                                }`}
+                              >
+                                {isAwaitingSubmission
+                                  ? `Awaiting Leader (${count}/${minSize})`
+                                  : isUnderSize
+                                  ? `Incomplete (${count}/${minSize} joined)`
+                                  : isOverSize
+                                  ? `Exceeds Limit (${count}/${maxSize})`
+                                  : `Approve Team (${count})`}
+                              </button>
+                              <button
+                                onClick={() => handleTeamStatusUpdate(group.teamId!, RegistrationStatus.REJECTED)}
+                                title={`Reject team "${group.teamName}"`}
+                                className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border bg-red-600/10 text-red-400 border-red-500/30 hover:bg-red-600 hover:text-white cursor-pointer transition-all"
+                              >
+                                Reject
+                              </button>
+                            </div>
                           );
                         })()
                       )}
@@ -4086,12 +4507,18 @@ export default function App() {
                           )}
                         </div>
 
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 items-center">
                           {reg.status === RegistrationStatus.PENDING && (
-                            <>
-                              <button onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.APPROVED)} className="p-1.5 bg-green-900/30 text-green-400 rounded-lg border border-green-800" title="Approve"><CheckCircle className="w-5 h-5" /></button>
-                              <button onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.REJECTED)} className="p-1.5 bg-red-900/30 text-red-400 rounded-lg border border-red-800" title="Reject"><XCircle className="w-5 h-5" /></button>
-                            </>
+                            reg.participationType === 'team' ? (
+                              <span className="text-[9px] font-bold text-orange-400 bg-orange-500/10 px-2 py-1 rounded border border-orange-500/20">
+                                Team Managed
+                              </span>
+                            ) : (
+                              <>
+                                <button onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.APPROVED)} className="p-1.5 bg-green-900/30 text-green-400 rounded-lg border border-green-800" title="Approve"><CheckCircle className="w-5 h-5" /></button>
+                                <button onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.REJECTED)} className="p-1.5 bg-red-900/30 text-red-400 rounded-lg border border-red-800" title="Reject"><XCircle className="w-5 h-5" /></button>
+                              </>
+                            )
                           )}
                           <button onClick={() => setSelectedRegistrationDetails(reg)} className="p-1.5 bg-slate-800 text-slate-300 rounded-lg border border-slate-700" title="View"><ExternalLink className="w-5 h-5" /></button>
                           <button onClick={() => handleDeleteRegistration(reg.id)} className="p-1.5 bg-red-900/30 text-red-400 rounded-lg border border-red-800 ml-1" title="Delete"><Trash2 className="w-5 h-5" /></button>
@@ -4154,47 +4581,91 @@ export default function App() {
                   {groupedRegs.map((group, gIdx) => (
                     <React.Fragment key={group.teamId || `indiv-${gIdx}`}>
                       {group.teamId && (
-                        <tr className="bg-orange-500/5 border-l-4 border-orange-500">
-                          <td className="px-6 py-2" colSpan={2}>
-                            <div className="flex items-center gap-3">
-                              <Users className="w-4 h-4 text-orange-400" />
-                              <span className="text-xs font-black uppercase tracking-widest text-orange-400">Team: {group.teamName}</span>
-                              <span className="text-[10px] font-mono bg-orange-500/10 px-1.5 py-0.5 rounded text-orange-300/70 border border-orange-500/20">
-                                {teams.find(t => t.id === group.teamId)?.inviteCode || 'N/A'}
-                              </span>
+                        <tr className="bg-gradient-to-r from-orange-500/15 via-orange-500/5 to-transparent border-t border-b border-orange-500/20">
+                          <td className="px-6 py-3.5" colSpan={totalColumns}>
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-lg bg-orange-500/20 border border-orange-500/30 flex items-center justify-center text-orange-400 shrink-0">
+                                  <Users className="w-4 h-4" />
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2.5">
+                                  <span className="text-xs font-black uppercase tracking-wider text-orange-400">
+                                    Team: {group.teamName}
+                                  </span>
+                                  <span className="text-[10px] font-mono font-bold bg-orange-500/10 text-orange-300 px-2 py-0.5 rounded border border-orange-500/25">
+                                    Code: {teams.find(t => t.id === group.teamId)?.inviteCode || 'N/A'}
+                                  </span>
+                                  <span className="text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700">
+                                    {group.regs.length} {group.regs.length === 1 ? 'Member' : 'Members'}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {group.regs.some(r => r.status === RegistrationStatus.PENDING || r.status === RegistrationStatus.TEAM_AWAITING_SUBMISSION) ? (
+                                  (() => {
+                                    const minSize = event?.minTeamSize || 1;
+                                    const maxSize = event?.maxTeamSize || 99;
+                                    const count = group.regs.length;
+                                    const isUnderSize = count < minSize;
+                                    const isOverSize = count > maxSize;
+                                    const isAwaitingSubmission = group.regs.some(r => r.status === RegistrationStatus.TEAM_AWAITING_SUBMISSION);
+                                    const canApprove = !isUnderSize && !isOverSize && !isAwaitingSubmission;
+                                    return (
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          disabled={!canApprove}
+                                          onClick={() => handleTeamStatusUpdate(group.teamId!, RegistrationStatus.APPROVED)}
+                                          title={
+                                            isAwaitingSubmission
+                                              ? `Team is still being formed. Awaiting team leader submission (${count} joined)`
+                                              : isUnderSize
+                                              ? `Team requires ${minSize}–${maxSize} members before approval (Current: ${count})`
+                                              : isOverSize
+                                              ? `Team exceeds max capacity of ${maxSize} members`
+                                              : `Approve team "${group.teamName}"`
+                                          }
+                                          className={`text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg border transition-all ${
+                                            !canApprove
+                                              ? 'bg-slate-800 text-amber-400/80 border-amber-500/30 cursor-not-allowed'
+                                              : 'bg-green-600/20 text-green-400 border-green-500/30 hover:bg-green-600 hover:text-white cursor-pointer shadow-sm'
+                                          }`}
+                                        >
+                                          {isAwaitingSubmission
+                                            ? `Awaiting Leader (${count}/${minSize})`
+                                            : isUnderSize
+                                            ? `Incomplete (${count}/${minSize})`
+                                            : isOverSize
+                                            ? `Exceeds (${count}/${maxSize})`
+                                            : `Approve Team (${count})`}
+                                        </button>
+                                        <button
+                                          onClick={() => handleTeamStatusUpdate(group.teamId!, RegistrationStatus.REJECTED)}
+                                          title={`Reject team "${group.teamName}"`}
+                                          className="text-[10px] font-black uppercase tracking-widest px-2.5 py-1.5 rounded-lg border bg-red-600/10 text-red-400 border-red-500/30 hover:bg-red-600 hover:text-white cursor-pointer transition-all"
+                                        >
+                                          Reject
+                                        </button>
+                                      </div>
+                                    );
+                                  })()
+                                ) : (
+                                  <div className="flex items-center gap-1.5 text-xs">
+                                    {group.regs.every(r => r.status === RegistrationStatus.APPROVED) ? (
+                                      <span className="text-green-400 flex items-center gap-1 font-semibold text-[11px]"><CheckCircle className="w-3.5 h-3.5" /> Team Approved</span>
+                                    ) : group.regs.every(r => r.status === RegistrationStatus.REJECTED) ? (
+                                      <span className="text-red-400 flex items-center gap-1 font-semibold text-[11px]"><XCircle className="w-3.5 h-3.5" /> Team Rejected</span>
+                                    ) : group.regs.some(r => r.status === RegistrationStatus.AWAITING_PAYMENT) ? (
+                                      <span className="text-amber-400 flex items-center gap-1 font-semibold text-[11px]">Payment Pending</span>
+                                    ) : null}
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                          </td>
-                          <td className="px-6 py-2 text-slate-500 text-[10px] uppercase font-bold tracking-tighter">
-                            {group.regs.length} Members
-                          </td>
-                          <td className="px-6 py-2" colSpan={4}></td>
-                          <td className="px-6 py-2 text-right">
-                            {group.regs.every(r => r.status === RegistrationStatus.PENDING) && (
-                              (() => {
-                                const minSize = event?.minTeamSize || 1;
-                                const isUnderSize = group.regs.length < minSize;
-                                return (
-                                  <button
-                                    disabled={isUnderSize}
-                                    onClick={async () => {
-                                      if (confirm(`Approve entire team "${group.teamName}" (${group.regs.length} members)?`)) {
-                                        await Promise.all(group.regs.map(r => updateRegistrationStatus(r.id, RegistrationStatus.APPROVED)));
-                                        addToast(`Team "${group.teamName}" approved!`, 'success');
-                                        loadData();
-                                      }
-                                    }}
-                                    className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-lg border transition-all ${isUnderSize ? 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed' : 'bg-green-600/20 text-green-400 border-green-500/30 hover:bg-green-600 hover:text-white'}`}
-                                  >
-                                    {isUnderSize ? `Under-sized (${group.regs.length}/${minSize})` : 'Approve Team'}
-                                  </button>
-                                );
-                              })()
-                            )}
                           </td>
                         </tr>
                       )}
                       {group.regs.map(reg => (
-                        <tr key={reg.id} className={`hover:bg-slate-800/50 transition-colors ${selectedRegistrationIds.includes(reg.id) ? 'bg-orange-900/10' : ''}`}>
+                        <tr key={reg.id} className={`hover:bg-slate-800/50 transition-colors ${selectedRegistrationIds.includes(reg.id) ? 'bg-orange-900/10' : ''} ${group.teamId ? 'bg-slate-900/40' : ''}`}>
                           <td className="px-6 py-4">
                             <input
                               type="checkbox"
@@ -4210,10 +4681,14 @@ export default function App() {
                             />
                           </td>
                           <td className="px-6 py-4">
-                            <div className="font-medium text-slate-200">{reg.participantName}</div>
-                            {reg.participationType === 'team' && reg.isTeamLeader && (
-                              <div className="text-[8px] font-black uppercase tracking-widest text-orange-500 mt-0.5">Team Leader</div>
-                            )}
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-slate-200">{reg.participantName}</span>
+                              {reg.participationType === 'team' && reg.isTeamLeader && (
+                                <span className="text-[8px] font-black uppercase tracking-wider text-orange-400 bg-orange-500/15 border border-orange-500/30 px-1.5 py-0.5 rounded">
+                                  Leader
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-6 py-4 text-slate-400">{reg.participantEmail}</td>
                           <td className="px-6 py-4"><Badge status={reg.status} /></td>
@@ -4229,57 +4704,65 @@ export default function App() {
                           )}
                           <td className="px-6 py-4">
                             {reg.attended ? (
-                              <span className="flex items-center gap-1 text-green-600 font-medium">
+                              <span className="flex items-center gap-1 text-green-500 font-medium text-xs">
                                 <CheckCircle className="w-4 h-4" /> Present
                               </span>
                             ) : (
-                              <span className="text-slate-400">Not yet</span>
+                              <span className="text-slate-400 text-xs">Not yet</span>
                             )}
                           </td>
-                          <td className="px-6 py-4 text-slate-400 text-sm">
+                          <td className="px-6 py-4 text-slate-400 text-xs">
                             {reg.attendanceTime ? format(new Date(reg.attendanceTime), 'h:mm a') : '-'}
                           </td>
                           <td className="px-6 py-4 text-right">
-                            {reg.status === RegistrationStatus.PENDING && (
-                              <div className="flex justify-end gap-2">
+                            <div className="flex items-center justify-end gap-2">
+                              {reg.status === RegistrationStatus.PENDING && (
+                                reg.participationType === 'team' ? (
+                                  <span className="text-[10px] font-bold text-orange-400 bg-orange-500/10 px-2.5 py-1 rounded-lg border border-orange-500/20 whitespace-nowrap">
+                                    Team Managed
+                                  </span>
+                                ) : (
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.APPROVED)}
+                                      className="p-1.5 text-green-400 hover:bg-green-900/30 rounded-lg transition-colors"
+                                      title="Approve"
+                                    >
+                                      <CheckCircle className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.REJECTED)}
+                                      className="p-1.5 text-red-400 hover:bg-red-900/30 rounded-lg transition-colors"
+                                      title="Reject"
+                                    >
+                                      <XCircle className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                )
+                              )}
+                              {reg.status === RegistrationStatus.APPROVED && !reg.attended && (
                                 <button
-                                  onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.APPROVED)}
-                                  className="p-1.5 text-green-400 hover:bg-green-900/30 rounded-md"
-                                  title="Approve"
+                                  onClick={() => handleManualAttendance(reg.id)}
+                                  className="text-xs font-semibold text-orange-400 hover:text-orange-300 hover:underline px-2 py-1 rounded hover:bg-orange-500/10 transition-colors whitespace-nowrap"
                                 >
-                                  <CheckCircle className="w-5 h-5" />
+                                  Mark Present
                                 </button>
-                                <button
-                                  onClick={() => handleStatusUpdate(reg.id, RegistrationStatus.REJECTED)}
-                                  className="p-1.5 text-red-400 hover:bg-red-900/30 rounded-md"
-                                  title="Reject"
-                                >
-                                  <XCircle className="w-5 h-5" />
-                                </button>
-                              </div>
-                            )}
-                            {reg.status === RegistrationStatus.APPROVED && !reg.attended && (
+                              )}
                               <button
-                                onClick={() => handleManualAttendance(reg.id)}
-                                className="text-orange-400 hover:text-orange-300 text-sm font-medium hover:underline mr-2"
+                                onClick={() => setSelectedRegistrationDetails(reg)}
+                                className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+                                title="View Details"
                               >
-                                Mark Present
+                                <ExternalLink className="w-4 h-4" />
                               </button>
-                            )}
-
-                            <button
-                              onClick={() => setSelectedRegistrationDetails(reg)}
-                              className="text-slate-400 hover:text-slate-200 text-sm font-medium hover:underline ml-2"
-                            >
-                              View
-                            </button>
-                            <button
-                              onClick={() => handleDeleteRegistration(reg.id)}
-                              className="text-red-400 hover:text-red-300 text-sm font-medium hover:underline ml-3"
-                              title="Delete Registration"
-                            >
-                              Delete
-                            </button>
+                              <button
+                                onClick={() => handleDeleteRegistration(reg.id)}
+                                className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                                title="Delete Registration"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -4287,7 +4770,7 @@ export default function App() {
                   ))}
                   {groupedRegs.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-6 py-8 text-center text-slate-400">No registrations found matching criteria.</td>
+                      <td colSpan={totalColumns} className="px-6 py-8 text-center text-slate-400">No registrations found matching criteria.</td>
                     </tr>
                   )}
                 </tbody>
@@ -4295,6 +4778,370 @@ export default function App() {
             </div>
           </>
         )}
+      </div>
+    );
+  };
+
+  const renderEditProfile = () => {
+    if (!currentUser) return null;
+
+    const roleBadgeColor = currentUser.role === 'admin'
+      ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
+      : currentUser.role === 'organizer'
+        ? 'bg-orange-500/10 text-orange-400 border-orange-500/20'
+        : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+
+    const handleBack = () => {
+      if (window.history.length > 2) {
+        navigate(-1);
+      } else if (currentUser.role === 'admin') {
+        navigate('/admin');
+      } else if (currentUser.role === 'organizer') {
+        navigate('/organizer');
+      } else {
+        navigate('/explore');
+      }
+    };
+
+    return (
+      <div className="pt-28 pb-20 max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 animate-in fade-in duration-500">
+        {/* Top Navigation Row */}
+        <div className="flex items-center justify-between mb-8">
+          <button
+            type="button"
+            onClick={handleBack}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white transition-all text-xs font-bold uppercase tracking-wider border border-white/10 cursor-pointer"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            Back to Dashboard
+          </button>
+
+          <div className="flex items-center gap-2">
+            <span className={`px-3 py-1 rounded-full text-[11px] font-black uppercase tracking-wider border ${roleBadgeColor}`}>
+              {currentUser.role}
+            </span>
+          </div>
+        </div>
+
+        {/* Page Title & Subtitle */}
+        <div className="mb-8">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></div>
+            <span className="text-[10px] font-black text-orange-400 uppercase tracking-[0.3em]">Account Settings</span>
+          </div>
+          <h1 className="text-3xl sm:text-4xl font-black font-outfit text-white tracking-tight">
+            Edit Profile
+          </h1>
+          <p className="text-slate-400 text-sm mt-1">
+            Manage your personal identity, contact verification, and account credentials.
+          </p>
+        </div>
+
+        <form onSubmit={handleUpdateProfile} className="space-y-8">
+          {/* Card 1: Identity & Avatar */}
+          <div className="glass-card rounded-[32px] p-6 sm:p-8 border border-white/10 bg-[#0f172a]/60 backdrop-blur-xl relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-80 h-80 bg-orange-500/5 rounded-full blur-3xl pointer-events-none" />
+
+            <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6 sm:gap-8 pb-8 border-b border-white/5">
+              {/* Avatar Photo with Hover Action */}
+              <div className="relative group cursor-pointer flex-shrink-0">
+                <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-full overflow-hidden border-4 border-[#0f172a] shadow-2xl ring-2 ring-white/10 group-hover:ring-orange-500 transition-all duration-300 flex items-center justify-center bg-slate-800">
+                  {profileForm.avatarUrl || currentUser?.avatarUrl ? (
+                    <img
+                      src={profileForm.avatarUrl || currentUser?.avatarUrl}
+                      alt="Avatar"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <UserCircle className="w-20 h-20 text-slate-600" />
+                  )}
+                </div>
+                <div className="absolute inset-0 bg-black/60 rounded-full flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-[2px]">
+                  <Camera className="w-7 h-7 text-white drop-shadow-lg mb-1" />
+                  <span className="text-[9px] font-bold text-white uppercase tracking-wider">Change</span>
+                </div>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                  onChange={(e) => handleImageUpload(e, 'profile')}
+                />
+              </div>
+
+              {/* Identity Header */}
+              <div className="flex-1 text-center sm:text-left space-y-2">
+                <h3 className="text-xl font-bold font-outfit text-white">
+                  {profileForm.name || currentUser.name || 'Your Name'}
+                </h3>
+                <p className="text-xs text-slate-400 font-mono">
+                  {currentUser.email}
+                </p>
+                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 pt-2">
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border ${roleBadgeColor}`}>
+                    {currentUser.role} Account
+                  </span>
+                  {currentUser.phoneNumber && (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-green-500/10 text-green-400 border border-green-500/20 flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3" /> Phone Verified
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-500 pt-1">
+                  Click on your photo above to upload or crop a custom avatar image (PNG, JPG, max 5MB).
+                </p>
+              </div>
+            </div>
+
+            {/* Inputs: Full Name & Email */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-6">
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider ml-1">Full Name</label>
+                <input
+                  type="text"
+                  required
+                  className="w-full px-4 py-3.5 rounded-2xl bg-slate-900/80 border border-slate-700/60 text-white font-medium focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500 outline-none transition-all placeholder:text-slate-600"
+                  value={profileForm.name}
+                  onChange={e => setProfileForm({ ...profileForm, name: e.target.value })}
+                  placeholder="John Doe"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between ml-1">
+                  <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">Email Address</label>
+                  <span className="text-[10px] text-slate-500 font-medium flex items-center gap-1">
+                    <Lock className="w-3 h-3" /> Read Only
+                  </span>
+                </div>
+                <input
+                  type="email"
+                  disabled
+                  className="w-full px-4 py-3.5 rounded-2xl bg-slate-900/40 border border-slate-800 text-slate-500 font-medium cursor-not-allowed outline-none select-none"
+                  value={profileForm.email}
+                />
+                <p className="text-[10px] text-slate-600 ml-1">Email is tied to your primary login account and cannot be modified directly.</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 2: Contact & Phone Verification */}
+          <div className="glass-card rounded-[32px] p-6 sm:p-8 border border-white/10 bg-[#0f172a]/60 backdrop-blur-xl space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-white/5">
+              <div>
+                <h3 className="text-lg font-bold font-outfit text-white">Contact & Mobile Verification</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Used for critical booking confirmations, entry gate passes, and SMS OTP authentication.</p>
+              </div>
+              {profileForm.isPhoneVerified ? (
+                <span className="text-xs text-green-400 font-bold flex items-center gap-1.5 bg-green-500/10 px-3 py-1 rounded-full border border-green-500/20 self-start sm:self-auto">
+                  <CheckCircle className="w-3.5 h-3.5" /> Verified
+                </span>
+              ) : (
+                <span className="text-xs text-amber-400 font-bold bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/20 self-start sm:self-auto">
+                  Verification Required
+                </span>
+              )}
+            </div>
+
+            <div className="space-y-2 pt-2">
+              <label className="text-xs font-bold text-slate-300 uppercase tracking-wider ml-1">Mobile Phone Number</label>
+              <div className="flex flex-col sm:flex-row gap-3">
+                {/* Country Code Selector */}
+                <div className="relative w-full sm:w-44 shrink-0">
+                  <select
+                    disabled={isSendingProfilePhoneOtp || isVerifyingProfilePhoneOtp || !!currentUser?.phoneNumber}
+                    value={profileDialCode}
+                    onChange={e => {
+                      setProfileDialCode(e.target.value);
+                      const newFull = `${e.target.value}${profileNationalNumber.replace(/[^0-9]/g, '')}`;
+                      setProfileForm(prev => ({
+                        ...prev,
+                        phoneNumber: newFull,
+                        isPhoneVerified: newFull === currentUser?.phoneNumber
+                      }));
+                    }}
+                    className="w-full px-4 py-3.5 rounded-2xl border border-slate-700/60 bg-slate-900/90 text-white font-mono text-xs font-bold outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/30 appearance-none cursor-pointer pr-8 disabled:opacity-50"
+                  >
+                    {COUNTRY_CODES.map(c => (
+                      <option key={c.code} value={c.dialCode} className="bg-[#0f172a] text-white py-1.5">
+                        {c.flag} {c.name} ({c.dialCode})
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+
+                {/* National Phone Input */}
+                <div className="relative flex-1">
+                  <input
+                    type="tel"
+                    inputMode="numeric"
+                    disabled={!!currentUser?.phoneNumber}
+                    placeholder="98765 43210"
+                    value={profileNationalNumber}
+                    onChange={e => {
+                      const val = e.target.value.replace(/[^0-9\s-]/g, '');
+                      setProfileNationalNumber(val);
+                      const newFullPhone = `${profileDialCode}${val.replace(/[^0-9]/g, '')}`;
+                      setProfileForm(prev => ({
+                        ...prev,
+                        phoneNumber: newFullPhone,
+                        isPhoneVerified: newFullPhone === currentUser?.phoneNumber
+                      }));
+                    }}
+                    className={`w-full px-4 py-3.5 rounded-2xl bg-slate-900/80 border text-white font-mono font-medium outline-none transition-all ${profileForm.isPhoneVerified
+                      ? 'border-green-500/40 bg-green-950/20 text-green-200'
+                      : 'border-slate-700/60 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/30'
+                      } disabled:opacity-60 disabled:cursor-not-allowed`}
+                  />
+                </div>
+
+                {/* Verify Button (Twilio SMS) */}
+                {!currentUser?.phoneNumber && !profileForm.isPhoneVerified && profileNationalNumber.trim().length >= 5 && (
+                  <button
+                    type="button"
+                    disabled={isSendingProfilePhoneOtp || isVerifyingProfilePhoneOtp}
+                    onClick={handleSendProfilePhoneOtp}
+                    className="px-5 py-3.5 rounded-2xl bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 text-white font-bold text-xs shadow-lg shadow-orange-900/30 whitespace-nowrap cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 transition-all active:scale-95"
+                  >
+                    {isSendingProfilePhoneOtp ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Sending SMS...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Smartphone className="w-4 h-4" />
+                        <span>Verify via SMS</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+
+              {currentUser?.phoneNumber ? (
+                <p className="text-[11px] text-green-400 font-medium ml-1 flex items-center gap-1.5 pt-1">
+                  <Shield className="w-3.5 h-3.5" /> Your phone number is verified and securely linked to your account.
+                </p>
+              ) : (
+                <p className="text-[11px] text-slate-500 ml-1 pt-1">
+                  Select your country code and enter your mobile digits to receive an SMS verification code.
+                </p>
+              )}
+
+              {/* OTP Entry when OTP dispatched */}
+              <AnimatePresence>
+                {showOtpInput && otpPurpose === 'profile' && !profileForm.isPhoneVerified && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="pt-3"
+                  >
+                    <div className="p-4 rounded-2xl bg-slate-900 border border-orange-500/40 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-orange-400 flex items-center gap-1.5">
+                          <KeyRound className="w-4 h-4" /> Enter 6-Digit SMS Code
+                        </span>
+                        <span className="text-[11px] text-slate-400 font-mono">
+                          Sent to {profileDialCode} {profileNationalNumber.replace(/[^0-9]/g, '')}
+                        </span>
+                      </div>
+
+                      <div className="flex gap-3">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          maxLength={6}
+                          placeholder="••••••"
+                          value={otp}
+                          onChange={e => setOtp(e.target.value.replace(/[^0-9]/g, ''))}
+                          className="flex-1 px-4 py-3 rounded-xl bg-slate-950 border border-orange-500/60 text-white font-mono text-center tracking-[0.5em] font-bold text-lg focus:ring-2 focus:ring-orange-500/30 outline-none"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          disabled={isVerifyingProfilePhoneOtp || otp.length < 4}
+                          onClick={handleVerifyProfilePhoneOtp}
+                          className="px-6 py-3 bg-green-600 hover:bg-green-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-green-900/30 transition-all disabled:opacity-50 cursor-pointer flex items-center gap-2"
+                        >
+                          {isVerifyingProfilePhoneOtp ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              <span>Verifying...</span>
+                            </>
+                          ) : (
+                            <span>Confirm OTP</span>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </div>
+
+          {/* Card 3: Danger Zone */}
+          <div className="rounded-[32px] p-6 sm:p-8 border border-red-500/20 bg-red-950/10 backdrop-blur-xl space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h4 className="text-sm font-bold text-red-400 uppercase tracking-wider flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4" /> Danger Zone
+                </h4>
+                <p className="text-xs text-slate-400 mt-1 leading-relaxed max-w-xl">
+                  Permanently delete your Eventron account, active permits, registrations, and associated profile records. This action cannot be undone.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={isSendingDeleteOtp}
+                onClick={() => handleOpenDeleteModal()}
+                className="px-5 py-3 rounded-2xl text-xs font-bold border transition-all bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20 hover:border-red-500/50 cursor-pointer disabled:opacity-60 flex items-center justify-center gap-2 whitespace-nowrap self-start sm:self-auto"
+              >
+                {isSendingDeleteOtp ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-red-400" />
+                    <span>Sending Code...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    <span>Delete Account</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Bottom Action Row */}
+          <div className="flex items-center justify-end gap-4 pt-4 border-t border-white/5">
+            <button
+              type="button"
+              onClick={handleBack}
+              className="px-6 py-3.5 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 font-bold text-sm transition-all cursor-pointer border border-white/10"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSavingProfile}
+              className="px-8 py-3.5 rounded-2xl bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 text-white font-bold text-sm shadow-xl shadow-orange-500/20 transition-all disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+            >
+              {isSavingProfile ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span>Saving Changes...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-5 h-5" />
+                  <span>Save Changes</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
       </div>
     );
   };
@@ -4328,9 +5175,11 @@ export default function App() {
             )
           } />
           <Route path="/explore" element={currentUser?.role === 'organizer' ? <Navigate to="/organizer" replace /> : currentUser?.role === 'admin' ? <Navigate to="/admin" replace /> : renderEvents()} />
-          <Route path="/browse" element={renderEvents()} />
+          <Route path="/browse" element={currentUser?.role === 'organizer' ? <Navigate to="/organizer" replace /> : currentUser?.role === 'admin' ? <Navigate to="/admin" replace /> : renderEvents()} />
           <Route path="/myticket" element={currentUser ? renderMyTickets() : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Please sign in to view your tickets.</div>} />
           <Route path="/organizer" element={authLoading ? <div className="flex justify-center items-center py-40"><Loader2 className="w-10 h-10 animate-spin text-orange-500" /></div> : currentUser?.role === 'organizer' ? renderOrganizer() : currentUser?.role === 'admin' ? <Navigate to="/admin" replace /> : <Navigate to="/explore" replace />} />
+          <Route path="/edit-page" element={currentUser ? renderEditProfile() : <Navigate to="/" replace />} />
+          <Route path="/edit-profile" element={<Navigate to="/edit-page" replace />} />
           <Route path="/admin" element={
             <Suspense fallback={<div className="flex justify-center p-20"><Loader2 className="animate-spin text-orange-500" /></div>}>
               {currentUser?.role === 'admin' ? <AdminDashboard currentUser={currentUser} onLogout={handleLogout} /> : <div className="text-center py-20 text-slate-400 glass-panel rounded-2xl mx-auto max-w-md">Access Restricted</div>}
@@ -4630,7 +5479,9 @@ export default function App() {
                   {newEvent.isPaid && (
                     <div className="space-y-4 animate-in slide-in-from-top-2">
                       <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-1">Ticket Price (₹)</label>
+                        <label className="block text-sm font-medium text-slate-300 mb-1">
+                          {newEvent.pricingType === 'per_person' ? 'Price Per Person (₹)' : 'Fixed Event Price (₹)'}
+                        </label>
                         <input
                           type="number"
                           min="1"
@@ -4638,8 +5489,45 @@ export default function App() {
                           className="w-full px-4 py-2 rounded-lg border border-slate-700 bg-slate-950 text-slate-100 focus:ring-2 focus:ring-orange-500 outline-none"
                           value={newEvent.price}
                           onChange={e => setNewEvent({ ...newEvent, price: e.target.value })}
-                          placeholder="e.g. 499"
+                          placeholder={newEvent.pricingType === 'per_person' ? "e.g. 25" : "e.g. 100"}
                         />
+                      </div>
+
+                      {/* Pricing Model: Overall vs Per Person */}
+                      <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                          Pricing Structure for Teams
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setNewEvent({ ...newEvent, pricingType: 'overall' })}
+                            className={`p-3 rounded-xl border text-left transition-all ${
+                              newEvent.pricingType !== 'per_person'
+                                ? 'bg-orange-500/10 border-orange-500 text-orange-400 shadow-md'
+                                : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                            }`}
+                          >
+                            <p className="text-xs font-bold uppercase tracking-wide">Overall Fixed Fee</p>
+                            <p className="text-[10px] text-slate-400 mt-1 leading-snug">
+                              Fixed total price irrespective of team size (e.g. ₹{newEvent.price || 100} flat)
+                            </p>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setNewEvent({ ...newEvent, pricingType: 'per_person' })}
+                            className={`p-3 rounded-xl border text-left transition-all ${
+                              newEvent.pricingType === 'per_person'
+                                ? 'bg-orange-500/10 border-orange-500 text-orange-400 shadow-md'
+                                : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                            }`}
+                          >
+                            <p className="text-xs font-bold uppercase tracking-wide">Per Person Wise</p>
+                            <p className="text-[10px] text-slate-400 mt-1 leading-snug">
+                              Rate multiplied by total team members (e.g. ₹{newEvent.price || 25} × members)
+                            </p>
+                          </button>
+                        </div>
                       </div>
 
                       <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-700 space-y-4">
@@ -5184,12 +6072,25 @@ export default function App() {
                 {selectedEventForReg.isPaid && (
                   <div className="mb-6 animate-in slide-in-from-top-2">
                     <div className="p-4 bg-slate-950 rounded-xl border border-slate-700/50 mb-4">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-slate-400 text-sm">Ticket Price</span>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-slate-400 text-sm">
+                          {selectedEventForReg.pricingType === 'per_person' && teamRegistrationData.mode === 'team'
+                            ? 'Price Per Member'
+                            : selectedEventForReg.pricingType === 'per_person'
+                            ? 'Price Per Person'
+                            : 'Event Fee (Fixed)'}
+                        </span>
                         <span className="text-white font-medium">₹{selectedEventForReg.price}</span>
                       </div>
+                      {teamRegistrationData.mode === 'team' && (
+                        <p className="text-[11px] text-orange-400/90 font-medium mt-1">
+                          {selectedEventForReg.pricingType === 'per_person'
+                            ? `Team fee: ₹${selectedEventForReg.price} × total joined team members. Paid in full by the team leader upon approval.`
+                            : `Team fee: Flat ₹${selectedEventForReg.price} for the entire team regardless of member count. Paid by the team leader upon approval.`}
+                        </p>
+                      )}
                       <div className="mt-2 text-[10px] text-slate-400 text-right opacity-80">
-                        Payment will be collected after organizer approval
+                        Payment will be collected from the team leader after organizer approval
                       </div>
                     </div>
                   </div>
@@ -5241,32 +6142,53 @@ export default function App() {
                 </div>
 
                 <div className="mb-6">
-                  <div className="flex justify-between text-slate-400 mb-2">
-                    <span>Ticket Price</span>
-                    <span>₹{selectedRegForPayment.event.price}</span>
-                  </div>
-                  {paymentAppliedPromo && (
-                    <div className="flex justify-between text-green-400 mb-2">
-                      <span className="flex items-center gap-1"><Tag className="w-3 h-3" /> {paymentAppliedPromo.code}</span>
-                      <span>-₹{paymentAppliedPromo.type === 'percentage'
-                        ? ((selectedRegForPayment.event.price || 0) * paymentAppliedPromo.value / 100).toFixed(2)
-                        : paymentAppliedPromo.value}</span>
-                    </div>
-                  )}
-                  <div className="border-t border-white/10 pt-2 flex justify-between text-xl font-bold text-white">
-                    <span>Total</span>
-                    <span>₹{(() => {
-                      let price = selectedRegForPayment.event.price || 0;
-                      if (paymentAppliedPromo) {
-                        if (paymentAppliedPromo.type === 'percentage') {
-                          price = price - (price * paymentAppliedPromo.value / 100);
-                        } else {
-                          price = price - paymentAppliedPromo.value;
-                        }
-                      }
-                      return Math.max(0, price).toFixed(2);
-                    })()}</span>
-                  </div>
+                  {(() => {
+                    const isTeamReg = selectedRegForPayment.reg.participationType === 'team';
+                    const teamId = selectedRegForPayment.reg.teamId;
+                    const teamRegs = teamId ? registrations.filter(r => r.teamId === teamId && r.status !== RegistrationStatus.REJECTED) : [];
+                    const teamObj = teamId ? teams.find(t => t.id === teamId) : null;
+                    const membersCount = Math.max(teamRegs.length, teamObj?.members?.length || 1);
+                    const isPerPerson = selectedRegForPayment.event.pricingType === 'per_person' && isTeamReg;
+                    const baseTotal = getEventTotalAmount(selectedRegForPayment.event, selectedRegForPayment.reg.participationType, selectedRegForPayment.reg.teamId);
+
+                    return (
+                      <>
+                        <div className="flex justify-between text-slate-400 mb-2">
+                          <span>
+                            {isPerPerson ? `Ticket Price (₹${selectedRegForPayment.event.price} × ${membersCount} members)` : isTeamReg ? 'Team Fixed Fee' : 'Ticket Price'}
+                          </span>
+                          <span className="text-white font-medium">₹{baseTotal}</span>
+                        </div>
+                        {isPerPerson && (
+                          <div className="text-[11px] text-orange-400/90 mb-2 bg-orange-500/10 px-3 py-1.5 rounded-lg border border-orange-500/20">
+                            Per-person rate: ₹{selectedRegForPayment.event.price} each for {membersCount} registered team members.
+                          </div>
+                        )}
+                        {paymentAppliedPromo && (
+                          <div className="flex justify-between text-green-400 mb-2">
+                            <span className="flex items-center gap-1"><Tag className="w-3 h-3" /> {paymentAppliedPromo.code}</span>
+                            <span>-₹{paymentAppliedPromo.type === 'percentage'
+                              ? ((baseTotal * paymentAppliedPromo.value) / 100).toFixed(2)
+                              : paymentAppliedPromo.value}</span>
+                          </div>
+                        )}
+                        <div className="border-t border-white/10 pt-2 flex justify-between text-xl font-bold text-white">
+                          <span>Total Amount</span>
+                          <span>₹{(() => {
+                            let price = baseTotal;
+                            if (paymentAppliedPromo) {
+                              if (paymentAppliedPromo.type === 'percentage') {
+                                price = price - (price * paymentAppliedPromo.value / 100);
+                              } else {
+                                price = price - paymentAppliedPromo.value;
+                              }
+                            }
+                            return Math.max(0, price).toFixed(2);
+                          })()}</span>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
 
                 {/* Promo Code Input */}

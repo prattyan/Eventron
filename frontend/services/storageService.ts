@@ -141,15 +141,28 @@ async function mongoRequest(action: string, collection: string, body: any, retri
       jsonResponse = await decryptData(jsonResponse);
     }
 
-    if (action === 'fetchBatch' && body.clientHashes) {
+    if (action === 'fetchBatch') {
       const cachedData = await getFromCache(cacheKey);
-      if (cachedData && cachedData.results && jsonResponse.results) {
+      if (body.clientHashes && cachedData && cachedData.results && jsonResponse.results) {
         for (let i = 0; i < jsonResponse.results.length; i++) {
           if (jsonResponse.results[i] && jsonResponse.results[i].notModified) {
             jsonResponse.results[i] = cachedData.results[i];
           }
         }
       }
+
+      // Populate client hashes so subsequent background polls skip re-downloading unchanged data
+      const hashes: Record<string, string> = {};
+      if (jsonResponse.results) {
+        jsonResponse.results.forEach((r: any, idx: number) => {
+          if (r && r.hash) {
+            hashes[String(idx)] = r.hash;
+          } else if (cachedData && cachedData.hashes && cachedData.hashes[String(idx)]) {
+            hashes[String(idx)] = cachedData.hashes[String(idx)];
+          }
+        });
+      }
+      jsonResponse.hashes = hashes;
     }
 
     if (['find', 'findOne', 'fetchBatch'].includes(action)) {
@@ -987,18 +1000,75 @@ export const getTeamsByEventId = async (eventId: string): Promise<Team[]> => {
   return [];
 };
 
+export const deleteTeam = async (teamId: string): Promise<boolean> => {
+  if (USE_MONGO) {
+    try {
+      await mongoRequest('deleteOne', 'teams', { filter: { id: teamId } });
+      return true;
+    } catch (e) {
+      console.error("Mongo delete team failed", e);
+      return false;
+    }
+  }
+  const stored = localStorage.getItem('teams') || '[]';
+  const teams: Team[] = JSON.parse(stored);
+  localStorage.setItem('teams', JSON.stringify(teams.filter(t => t.id !== teamId)));
+  return true;
+};
+
+export const removeMemberFromTeam = async (teamId: string, userIdOrEmail: string): Promise<boolean> => {
+  if (USE_MONGO) {
+    try {
+      const team = await getTeamById(teamId);
+      if (!team) return false;
+      const updatedMembers = team.members.filter(m => m.userId !== userIdOrEmail && m.email !== userIdOrEmail);
+      await mongoRequest('updateOne', 'teams', {
+        filter: { id: teamId },
+        update: { $set: { members: updatedMembers } }
+      });
+      return true;
+    } catch (e) {
+      console.error("Mongo remove member from team failed", e);
+      return false;
+    }
+  }
+  return false;
+};
+
 // --- Auth & Users ---
 
 // Retrieve user profile
-export const getUserProfile = async (uid: string): Promise<User | null> => {
+export const getUserProfile = async (uid: string, email?: string): Promise<User | null> => {
   if (USE_MONGO) {
     try {
-      // Prioritize admins collection check
-      let result = await mongoRequest('findOne', 'admins', { filter: { id: uid } });
-      if (!result.document) {
-        result = await mongoRequest('findOne', 'users', { filter: { id: uid } });
+      const cleanEmail = email ? email.trim().toLowerCase() : (uid && uid.includes('@') ? uid.trim().toLowerCase() : undefined);
+      const orConditions: any[] = [{ id: uid }];
+      if (cleanEmail) {
+        orConditions.push({ email: cleanEmail });
+        orConditions.push({ email: { $regex: `^${cleanEmail}$`, $options: 'i' } });
       }
-      return result.document || null;
+      const filter = orConditions.length > 1 ? { $or: orConditions } : { id: uid };
+
+      // Prioritize admins collection check
+      let result = await mongoRequest('findOne', 'admins', { filter });
+      if (!result.document) {
+        result = await mongoRequest('findOne', 'users', { filter });
+      }
+
+      const doc = result.document;
+      if (doc) {
+        // Sync document id to current auth uid if different and not an email string
+        if (doc.id !== uid && !uid.includes('@')) {
+          doc.id = uid;
+          const targetCol = doc.role === 'admin' ? 'admins' : 'users';
+          mongoRequest('updateOne', targetCol, {
+            filter: { email: doc.email },
+            update: { $set: { id: uid } }
+          }).catch(console.error);
+        }
+        return doc;
+      }
+      return null;
     } catch (e) {
       console.error("Mongo get user failed", e);
       return null;
@@ -1120,33 +1190,34 @@ export const registerUser = async (user: Omit<User, 'id'>, password: string): Pr
 };
 
 export const loginUser = async (email: string, password: string): Promise<User | null> => {
+  const cleanEmail = email.trim().toLowerCase();
+
   if (USE_FIREBASE_AUTH) {
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const profile = await getUserProfile(userCredential.user.uid);
+      const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      const profile = await getUserProfile(userCredential.user.uid, cleanEmail);
       if (profile) {
         localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(profile));
+        return profile;
       }
-      return profile;
     } catch (error) {
-      console.error("Firebase Login error:", error);
-      return null;
+      console.warn("Firebase Login error, checking direct database:", error);
     }
   }
 
-  // Common Logic for Mongo or Local
+  // Common Logic for Mongo or Local (No Auth Provider or Firebase fallback)
   let user: User | null = null;
 
   if (USE_MONGO) {
     try {
       let result = await mongoRequest('findOne', 'admins', {
-        filter: { email: email, password: password }
+        filter: { email: cleanEmail, password: password }
       });
       user = result.document || null;
 
       if (!user) {
         result = await mongoRequest('findOne', 'users', {
-          filter: { email: email, password: password }
+          filter: { email: cleanEmail, password: password }
         });
         user = result.document || null;
       }
@@ -1156,7 +1227,7 @@ export const loginUser = async (email: string, password: string): Promise<User |
   } else {
     const stored = localStorage.getItem(STORAGE_KEYS.USERS);
     const users: User[] = stored ? JSON.parse(stored) : [];
-    user = users.find(u => u.email === email && (u as any).password === password) || null;
+    user = users.find(u => u.email.toLowerCase() === cleanEmail && (u as any).password === password) || null;
   }
 
   if (user) {
@@ -1305,7 +1376,7 @@ export const verifyPhoneOtp = async (confirmationResult: any, otp: string, fallb
   if (confirmationResult && typeof confirmationResult.confirm === 'function') {
     const result = await confirmationResult.confirm(otp);
     const user = result.user;
-    return await getUserProfile(user.uid);
+    return await getUserProfile(user.uid, user.email || undefined);
   }
   throw new Error("Unable to verify OTP: missing phone number reference.");
 };
@@ -1321,8 +1392,8 @@ export const loginWithGoogle = async (role: 'attendee' | 'organizer'): Promise<U
     const result = await signInWithPopup(auth, googleProvider);
     const firebaseUser = result.user;
 
-    // Check if user profile already exists
-    let userProfile = await getUserProfile(firebaseUser.uid);
+    // Check if user profile already exists (by UID or email)
+    let userProfile = await getUserProfile(firebaseUser.uid, firebaseUser.email || undefined);
 
     if (!userProfile) {
       // First time login - create profile
@@ -1335,6 +1406,8 @@ export const loginWithGoogle = async (role: 'attendee' | 'organizer'): Promise<U
         password: '', // No password for OAuth
       };
       await saveUserProfile(userProfile);
+    } else {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(userProfile));
     }
 
     return userProfile;
@@ -1357,7 +1430,7 @@ export const subscribeToAuth = (callback: (user: User | null) => void) => {
   if (USE_FIREBASE_AUTH) {
     return onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        const userProfile = await getUserProfile(firebaseUser.uid);
+        const userProfile = await getUserProfile(firebaseUser.uid, firebaseUser.email || undefined);
         if (userProfile) {
           localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(userProfile));
           callback(userProfile);
@@ -1388,14 +1461,12 @@ export const subscribeToAuth = (callback: (user: User | null) => void) => {
   if (storedUser) {
     try {
       const user = JSON.parse(storedUser);
-      // Verify user still exists in "database" but be lenient if server is down
-      getUserProfile(user.id).then(verified => {
+      // Verify user still exists in database and refresh profile
+      getUserProfile(user.id, user.email).then(verified => {
         if (verified) {
+          localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(verified));
           callback(verified);
         } else {
-          // Only remove if we actually got a 'null' response from a WORKING server
-          // (Wait, getUserProfile returns null on catch. We should distinguish between "not found" and "request failed")
-          // For now, let's trust the local storage if the server is unreachable.
           callback(user);
         }
       }).catch(() => {

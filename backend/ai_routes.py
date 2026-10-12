@@ -105,15 +105,48 @@ async def chat_stream(request: Request):
         query = body.get("query", "")
         context = body.get("context", [])
 
+        from datetime import datetime, timedelta
+        current_time = datetime.now()
+        current_date_time = current_time.strftime("%Y-%m-%d %H:%M:%S")
+
+        def check_is_past(e):
+            if e.get("isPast") is not None:
+                return bool(e.get("isPast"))
+            end_str = e.get("endDate") or e.get("date")
+            if not end_str:
+                return False
+            try:
+                clean_str = end_str.replace("Z", "").split("+")[0]
+                if "T" in clean_str:
+                    dt = datetime.fromisoformat(clean_str)
+                elif len(clean_str) == 10:
+                    dt = datetime.strptime(clean_str, "%Y-%m-%d")
+                else:
+                    dt = datetime.fromisoformat(clean_str)
+                if not e.get("endDate"):
+                    dt = dt + timedelta(hours=1)
+                return dt < current_time
+            except Exception:
+                return False
+
+        all_upcoming = [e for e in context if not check_is_past(e)]
+        all_past = [e for e in context if check_is_past(e)]
+
+        query_lower = query.lower()
+        is_asking_past = any(w in query_lower for w in [
+            "past", "previous", "concluded", "ended", "history", "held", "last year", "last month", "what was", "who won", "prior"
+        ])
+        has_specific_past_title = any(
+            p.get("title") and len(p.get("title", "")) > 3 and p.get("title", "").lower() in query_lower
+            for p in all_past
+        )
+        should_include_past = is_asking_past or has_specific_past_title
+
         # 1. Vector Similarity Search (RAG)
         from main import get_embedding, cosine_similarity
-        
-        # Compute embedding for the user's query
         query_vector = await get_embedding(query)
-        
-        scored_events = []
-        if query_vector and context:
-            # Generate embeddings for context events concurrently
+
+        if query_vector:
             async def get_event_score(e):
                 text = f"{e.get('title', '')} {e.get('description', '')} {e.get('type', '')}"
                 vec = await get_embedding(text)
@@ -122,51 +155,56 @@ async def chat_stream(request: Request):
                     return {"event": e, "score": score}
                 return {"event": e, "score": -1}
 
-            # Only process up to 20 events to avoid rate limits
-            tasks = [get_event_score(e) for e in context[:20]]
-            results = await asyncio.gather(*tasks)
-            
-            # Sort by score and take top 5
-            scored_events = sorted(results, key=lambda x: x["score"], reverse=True)[:5]
-            top_events = [res["event"] for res in scored_events]
+            if not should_include_past and all_upcoming:
+                # Strictly evaluate upcoming events ONLY
+                upcoming_tasks = [get_event_score(e) for e in all_upcoming[:15]]
+                upcoming_results = await asyncio.gather(*upcoming_tasks)
+                upcoming_scored = sorted(upcoming_results, key=lambda x: x["score"], reverse=True)
+                top_upcoming = [r["event"] for r in upcoming_scored[:5]]
+                top_past = []
+            else:
+                # User asked about past events
+                tasks = [get_event_score(e) for e in context[:20]]
+                results = await asyncio.gather(*tasks)
+                scored = sorted(results, key=lambda x: x["score"], reverse=True)
+                top_upcoming = [r["event"] for r in scored if not check_is_past(r["event"])][:4]
+                top_past = [r["event"] for r in scored if check_is_past(r["event"])][:4] if should_include_past else []
         else:
-            top_events = context[:5]
+            top_upcoming = all_upcoming[:5]
+            top_past = all_past[:2] if should_include_past else []
 
-        # Use full descriptions now that we have fewer events
-        events_summary = "\n".join([
-            f"- Title: {e.get('title')}\n  Type: {e.get('type')}\n  Date: {e.get('date')}\n  Location: {e.get('location')}\n  Price: {('₹' + str(e.get('price'))) if e.get('isPaid') else 'Free'}\n  Capacity: {e.get('capacity')}\n  Details: {e.get('description', '')}"
-            for e in top_events
-        ])
+        upcoming_summary = "\n".join([
+            f"- Title: {e.get('title')}\n  Type: {e.get('type')}\n  Date: {e.get('date')} (End: {e.get('endDate', e.get('date'))})\n  Location: {e.get('location')}\n  Price: {('₹' + str(e.get('price'))) if e.get('isPaid') else 'Free'}\n  Capacity: {e.get('capacity')}\n  Details: {e.get('description', '')}"
+            for e in top_upcoming
+        ]) or "No upcoming events currently scheduled."
 
-        from datetime import datetime
-        current_date_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        past_summary = "\n".join([
+            f"- Title: {e.get('title')} [STATUS: CONCLUDED / EXPIRED]\n  Concluded On: {e.get('endDate', e.get('date'))}\n  Location: {e.get('location')}\n  Details: {e.get('description', '')}"
+            for e in top_past
+        ]) if top_past else "None"
 
         prompt = f"""
-        You are an intelligent virtual assistant for an event management platform called "Eventron".
-        Your role is to help users find information about events based on the provided list.
+You are an intelligent virtual assistant for an event management platform called "Eventron".
+Your role is to help users discover and learn about events on the platform.
 
-        Current Date: {current_date_time}
+Current Date & Time: {current_date_time}
 
-        Context - Available Events:
-        {events_summary}
+=== ACTIVE & UPCOMING EVENTS (Available for registration) ===
+{upcoming_summary}
 
-        User Query: "{query}"
+=== PAST / CONCLUDED EVENTS (Expired - Registration closed) ===
+{past_summary}
 
-        Instructions:
-        1. Answer the user's question accurately based ONLY on the provided event context.
-        2. If the user asks for "upcoming" events, strictly ONLY list events scheduled AFTER the Current Date provided above. Do not list events that have already passed.
-        3. If the user asks about something not in the list, politely say you don't have information on that.
-        4. Be helpful, concise, and professional.
-        5. If recommending an event, mention its title and date.
-        6. Do not invent facts. All prices should be formatted in INR (₹).
+User Query: "{query}"
 
-        Examples:
-        User: "Are there any tech events?"
-        Assistant: "Yes, 'Tech Summit 2026' is happening on Oct 10th. It costs ₹500."
-        
-        User: "When is the hackathon?"
-        Assistant: "The 'Global Hackathon' is scheduled for November 15th at 10:00 AM."
-        """
+Strict Instructions:
+1. When recommending, highlighting, or suggesting events (e.g. for greetings, "what events do you have?", "suggest an event", or general browsing), you MUST ONLY suggest events from the "ACTIVE & UPCOMING EVENTS" section.
+2. NEVER suggest or present expired/concluded events as "available" or open for participation.
+3. If the user explicitly asks about past events or event history (e.g. "what events were held?", "did event X happen?"), you may refer to the "PAST / CONCLUDED EVENTS" section, but you MUST explicitly clarify that the event has already concluded and is no longer open for registration.
+4. If there are no upcoming events matching the user's question, state politely that there are currently no upcoming events matching their inquiry.
+5. All prices should be formatted in INR (₹).
+6. Be concise, engaging, and professional.
+"""
 
         # We will define a generator for the stream
         async def stream_generator():

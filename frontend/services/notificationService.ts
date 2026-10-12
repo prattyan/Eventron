@@ -24,12 +24,50 @@ const simulateSendEmail = async (payload: EmailPayload): Promise<boolean> => {
   return true;
 };
 
+export interface StatusEmailOptions {
+  isTeam?: boolean;
+  teamName?: string;
+  membersCount?: number;
+  isPaid?: boolean;
+  price?: number;
+  eventDate?: string;
+  eventLocation?: string;
+}
+
 export const sendStatusUpdateEmail = async (
   toEmail: string,
   participantName: string,
   eventTitle: string,
-  status: RegistrationStatus
+  status: RegistrationStatus,
+  options?: StatusEmailOptions
 ): Promise<boolean> => {
+  try {
+    const res = await fetch(`${API_BASE}/api/notifications/send-approval-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to_email: toEmail,
+        recipient_name: participantName,
+        event_title: eventTitle,
+        event_date: options?.eventDate || '',
+        event_location: options?.eventLocation || '',
+        is_team: Boolean(options?.isTeam),
+        team_name: options?.teamName || '',
+        members_count: options?.membersCount || 1,
+        is_paid: Boolean(options?.isPaid),
+        price: options?.price || 0,
+        status: status
+      })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return Boolean(data.success);
+    }
+  } catch (err) {
+    console.error("Failed to send approval email via SMTP:", err);
+  }
+
+  // Fallback to simulation log
   const isApproved = status === RegistrationStatus.APPROVED;
   const subject = isApproved
     ? `Confirmation: You're going to ${eventTitle}!`

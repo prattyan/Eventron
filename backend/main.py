@@ -99,7 +99,30 @@ if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
 
 # Persistent Local Cache
 cache = dc.Cache(os.path.join(_BACKEND_DIR, ".cache"))
-CACHE_TTL = 120 
+DEFAULT_CACHE_TTL = 120
+
+# Granular collection TTLs:
+# Low-churn collections (events, reviews, users, promo codes) are cached for 30-60 mins
+# because any write operation (insertOne, updateOne, deleteOne) immediately purges
+# cache:{collection}:* and notifies clients via Socket.IO.
+# High-churn collections (registrations, messages) have short TTLs for near-real-time accuracy.
+COLLECTION_CACHE_TTLS: dict[str, int] = {
+    "events": 1800,        # 30 mins (events rarely change; purged immediately on edit/create)
+    "reviews": 1800,       # 30 mins (reviews rarely change; purged on new review)
+    "users": 600,          # 10 mins (profile data)
+    "admins": 600,         # 10 mins (admin list)
+    "promo_codes": 1800,   # 30 mins (promo codes)
+    "site_stats": 300,     # 5 mins (site stats)
+    "registrations": 15,   # 15 secs (real-time capacity, spots, ticket approval)
+    "teams": 30,           # 30 secs (live team rosters)
+    "messages": 5,         # 5 secs (chat messages)
+    "notifications": 15,   # 15 secs (alerts)
+}
+
+def get_cache_ttl(collection_name: str | None) -> int:
+    if not collection_name:
+        return DEFAULT_CACHE_TTL
+    return COLLECTION_CACHE_TTLS.get(collection_name, DEFAULT_CACHE_TTL) 
 
 rate_limit_map: dict[str, dict[str, Any]] = {}
 RATE_LIMIT_WINDOW = 60  # seconds
@@ -219,13 +242,13 @@ async def disconnect(sid):
     await sio.emit("active_users_count", {"count": count, "totalVisitors": total_visitors})
 
 
-@sio.on("get_active_users")
+@sio.on("get_active_users")  # pyright: ignore[reportOptionalCall]
 async def handle_get_active_users(sid, data=None):
     total_visitors = await asyncio.to_thread(_get_visitor_count)
     await sio.emit("active_users_count", {"count": len(connected_sids), "totalVisitors": total_visitors}, to=sid)
 
 
-@sio.on("record_visit")
+@sio.on("record_visit")  # pyright: ignore[reportOptionalCall]
 async def handle_record_visit(sid, data=None):
     is_new = bool(data and data.get("isNewVisit")) if isinstance(data, dict) else False
     if is_new:
@@ -557,7 +580,7 @@ async def create_payment_order(request: Request):
         receipt = body.get("receipt", f"order_{uuid.uuid4().hex[:10]}")
         notes = body.get("notes", {})
 
-        url = "https://api.cashfree.com/pg/orders"
+        url = "https://sandbox.cashfree.com/pg/orders" if CASHFREE_ENV == "SANDBOX" else "https://api.cashfree.com/pg/orders"
         
         payload = {
             "order_amount": amount,
@@ -585,6 +608,30 @@ async def create_payment_order(request: Request):
             resp = await client.post(url, json=payload, headers=headers)
             if resp.status_code == 200:
                 order_data = resp.json()
+                try:
+                    db = get_db()
+                    order_doc = {
+                        "order_id": receipt,
+                        "payment_session_id": order_data.get("payment_session_id"),
+                        "amount": amount,
+                        "currency": currency,
+                        "registrationId": notes.get("registrationId") if isinstance(notes, dict) else None,
+                        "eventId": notes.get("eventId") if isinstance(notes, dict) else None,
+                        "userId": notes.get("userId") if isinstance(notes, dict) else None,
+                        "teamId": notes.get("teamId") if isinstance(notes, dict) else None,
+                        "promoCode": notes.get("promoCode") if isinstance(notes, dict) else None,
+                        "status": "CREATED",
+                        "createdAt": datetime.now(timezone.utc).isoformat()
+                    }
+                    db["payment_orders"].update_one({"order_id": receipt}, {"$set": order_doc}, upsert=True)
+                    if isinstance(notes, dict) and notes.get("registrationId"):
+                        db["registrations"].update_one(
+                            {"id": notes.get("registrationId")},
+                            {"$set": {"pendingOrderId": receipt}}
+                        )
+                except Exception as save_err:
+                    print(f"Warning: Failed to save payment order doc: {save_err}")
+
                 return {"success": True, "payment_session_id": order_data.get("payment_session_id"), "order_id": receipt, "order": order_data}
             else:
                 print(f"Cashfree Order Error: {resp.text}")
@@ -601,6 +648,105 @@ async def create_payment_order(request: Request):
             status_code=500,
             media_type="application/json",
         )
+
+
+@app.post("/api/check-payment-status")
+async def check_payment_status(request: Request):
+    """
+    Checks in Cashfree whether the user has already paid for an event/registration.
+    Collects all candidate order IDs for this registration/event and queries Cashfree PG Orders API.
+    """
+    try:
+        body = await request.json()
+        registration_id = str(body.get("registrationId", "")).strip()
+        event_id = str(body.get("eventId", "")).strip()
+        user_id = str(body.get("userId", "")).strip()
+        team_id = str(body.get("teamId", "")).strip()
+        order_id_hint = str(body.get("orderId", "")).strip()
+
+        candidate_order_ids = []
+        if order_id_hint and order_id_hint not in candidate_order_ids:
+            candidate_order_ids.append(order_id_hint)
+
+        db = get_db()
+
+        # Check in registrations collection
+        if registration_id:
+            reg = db["registrations"].find_one({"id": registration_id})
+            if reg:
+                pending_oid = reg.get("pendingOrderId")
+                if pending_oid and pending_oid not in candidate_order_ids:
+                    candidate_order_ids.append(pending_oid)
+                payment_details = reg.get("paymentDetails") or {}
+                p_oid = payment_details.get("orderId")
+                if p_oid and p_oid not in candidate_order_ids:
+                    candidate_order_ids.append(p_oid)
+                t_oid = payment_details.get("transactionId")
+                if t_oid and t_oid not in candidate_order_ids:
+                    candidate_order_ids.append(t_oid)
+
+        # Check in payment_orders collection
+        queries = []
+        if registration_id:
+            queries.append({"registrationId": registration_id})
+        if team_id:
+            queries.append({"teamId": team_id})
+        if event_id and user_id:
+            queries.append({"eventId": event_id, "userId": user_id})
+
+        if queries:
+            matched_orders = list(db["payment_orders"].find({"$or": queries}).sort("createdAt", -1).limit(6))
+            for mo in matched_orders:
+                oid = mo.get("order_id")
+                if oid and oid not in candidate_order_ids:
+                    candidate_order_ids.append(oid)
+
+        headers = {
+            "accept": "application/json",
+            "x-client-id": CASHFREE_APP_ID,
+            "x-client-secret": CASHFREE_SECRET_KEY,
+            "x-api-version": "2023-08-01",
+        }
+
+        async with httpx.AsyncClient() as client:
+            for oid in candidate_order_ids:
+                try:
+                    url = (
+                        f"https://sandbox.cashfree.com/pg/orders/{oid}"
+                        if CASHFREE_ENV == "SANDBOX"
+                        else f"https://api.cashfree.com/pg/orders/{oid}"
+                    )
+                    resp = await client.get(url, headers=headers, timeout=6.0)
+                    if resp.status_code == 200:
+                        cf_data = resp.json()
+                        if cf_data.get("order_status") == "PAID":
+                            # Mark as paid in payment_orders
+                            db["payment_orders"].update_one(
+                                {"order_id": oid},
+                                {"$set": {"status": "PAID"}}
+                            )
+                            return {
+                                "success": True,
+                                "already_paid": True,
+                                "order_id": oid,
+                                "amount": cf_data.get("order_amount"),
+                                "currency": cf_data.get("order_currency", "INR"),
+                                "order": cf_data
+                            }
+                except Exception as inner_e:
+                    print(f"Error checking Cashfree order {oid}: {inner_e}")
+
+        return {
+            "success": True,
+            "already_paid": False
+        }
+    except Exception as e:
+        print(f"check_payment_status error: {e}")
+        return {
+            "success": False,
+            "already_paid": False,
+            "error": str(e)
+        }
 
 
 @app.post("/api/verify-payment")
@@ -658,6 +804,8 @@ async def verify_payment(request: Request):
         status_code=400,
         media_type="application/json",
     )
+
+
 
 
 
@@ -736,7 +884,7 @@ async def data_action(action: str, request: Request):
 
     def set_cache(data: Any):
         if action in ("find", "findOne"):
-            cache.set(cache_key, data, expire=CACHE_TTL)
+            cache.set(cache_key, data, expire=get_cache_ttl(collection_name))
 
     try:
         if action == "find":
@@ -933,8 +1081,8 @@ async def data_action(action: str, request: Request):
                 sub_cache_key = f"cache:{sub_col_name}:batch_{sub_action}:{req_hash}:{user_hash}"
 
                 cached_sub = cache.get(sub_cache_key)
-                if cached_sub:
-                    docs, data_hash = cached_sub
+                if cached_sub and isinstance(cached_sub, tuple) and len(cached_sub) >= 2:
+                    docs, data_hash = cached_sub[0], cached_sub[1]
                 else:
                     if sub_action == "find":
                         sub_query = req_item.get("filter") or {}
@@ -966,7 +1114,7 @@ async def data_action(action: str, request: Request):
                         return {"error": "Unsupported batch action"}
 
                     data_hash = hashlib.md5(json.dumps(docs, sort_keys=True, default=str).encode()).hexdigest()
-                    cache.set(sub_cache_key, (docs, data_hash), expire=CACHE_TTL)
+                    cache.set(sub_cache_key, (docs, data_hash), expire=get_cache_ttl(sub_col_name))
                 
                 client_hashes = body.get("clientHashes") or {}
                 client_hash = client_hashes.get(str(idx))
@@ -1305,6 +1453,159 @@ def send_email_message(to_email: str, subject: str, html_body: str, text_body: s
     else:
         print(f"📧 [EMAIL OTP (DEVELOPMENT MODE - SMTP NOT CONFIGURED IN .ENV)] To: {to_email} | Subject: {subject}")
         return False
+
+
+@app.post("/api/notifications/send-approval-email")
+async def send_approval_email_endpoint(request: Request):
+    """
+    Sends registration approval email notifications via SMTP.
+    - For Free events: Sends confirmation email that registration/team is approved.
+    - For Paid events: Sends notice to the team leader/participant that registration is approved
+      and payment must be completed to confirm spots.
+    """
+    try:
+        body = await request.json()
+        to_email = str(body.get("to_email", "")).strip().lower()
+        recipient_name = str(body.get("recipient_name", "Participant")).strip()
+        event_title = str(body.get("event_title", "Event")).strip()
+        event_date = str(body.get("event_date", "")).strip()
+        event_location = str(body.get("event_location", "")).strip()
+        is_team = bool(body.get("is_team", False))
+        team_name = str(body.get("team_name", "Your Team")).strip()
+        members_count = int(body.get("members_count", 1))
+        is_paid = bool(body.get("is_paid", False))
+        price = body.get("price", 0)
+        status = str(body.get("status", "APPROVED")).upper()
+
+        if not to_email or "@" not in to_email:
+            return Response(
+                content=json.dumps({"success": False, "message": "A valid recipient email is required."}),
+                status_code=400,
+                media_type="application/json",
+            )
+
+        team_badge = f"""
+            <div style="background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; padding: 12px 16px; margin: 16px 0;">
+                <p style="margin: 0; font-size: 13px; color: #9a3412;"><strong>👥 Team:</strong> {team_name} ({members_count} participants)</p>
+            </div>
+        """ if is_team else ""
+
+        team_admission_label = "team's " if is_team else ""
+        team_role_label = "team leader" if is_team else "participant"
+        team_note_text = f"for team {team_name}" if is_team else ""
+        team_bold_note = f"for team <strong>{team_name}</strong>" if is_team else ""
+        team_subject_prefix = f"Team {team_name} - " if is_team else ""
+        date_line = f'<p style="margin: 4px 0; font-size: 13px; color: #475569;"><strong>📅 Date:</strong> {event_date}</p>' if event_date else ''
+        location_line = f'<p style="margin: 4px 0; font-size: 13px; color: #475569;"><strong>📍 Location:</strong> {event_location}</p>' if event_location else ''
+
+        if status == "AWAITING_PAYMENT" or (is_paid and status != "REJECTED"):
+            # Paid event: Approval confirmed, payment required
+            subject = f"🎟️ Registration Approved! Action Required: Complete Payment for {event_title}"
+            html_body = f"""
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background-color: #f8fafc;">
+                <div style="background-color: #ffffff; border-radius: 20px; padding: 36px; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);">
+                    <div style="text-align: center; margin-bottom: 28px;">
+                        <span style="display: inline-block; padding: 6px 16px; background-color: #fff7ed; color: #ea580c; border: 1px solid #ffedd5; border-radius: 9999px; font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;">Payment Pending</span>
+                        <h2 style="color: #0f172a; margin: 16px 0 8px 0; font-size: 24px; font-weight: 800;">Registration Approved! 🎉</h2>
+                        <p style="color: #64748b; font-size: 14px; margin: 0;">Please complete payment to confirm your {team_admission_label}admission.</p>
+                    </div>
+
+                    <div style="background-color: #f8fafc; border-radius: 14px; padding: 22px; border: 1px solid #e2e8f0; margin-bottom: 24px;">
+                        <p style="color: #334155; font-size: 15px; line-height: 1.6; margin: 0 0 12px 0;">
+                            Hello <strong>{recipient_name}</strong>,
+                        </p>
+                        <p style="color: #475569; font-size: 14px; line-height: 1.6; margin: 0 0 12px 0;">
+                            The organizer has reviewed and <strong>approved</strong> your registration for <strong>{event_title}</strong>.
+                        </p>
+                        {team_badge}
+                        <p style="color: #475569; font-size: 14px; line-height: 1.6; margin: 12px 0 16px 0;">
+                            Because this is a paid event, your registration is currently pending payment. As the {team_role_label}, please complete payment to secure your ticket passes.
+                        </p>
+                        
+                        <div style="background: #ffffff; border-radius: 12px; padding: 16px; border: 1px solid #cbd5e1; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <span style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #64748b; display: block;">Total Registration Fee</span>
+                                <span style="font-size: 24px; font-weight: 900; color: #ea580c;">₹{price}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="text-align: center; margin: 32px 0;">
+                        <a href="https://eventron.xyz/myticket" style="display: inline-block; background: linear-gradient(135deg, #ea580c, #f97316); color: #ffffff; font-weight: 700; font-size: 14px; padding: 16px 36px; border-radius: 14px; text-decoration: none; box-shadow: 0 4px 15px rgba(234, 88, 12, 0.35);">
+                            Complete Payment on Eventron →
+                        </a>
+                    </div>
+
+                    <div style="border-top: 1px solid #f1f5f9; padding-top: 20px; text-align: center;">
+                        <p style="color: #94a3b8; font-size: 12px; line-height: 1.5; margin: 0;">
+                            Navigate to <strong>My Tickets</strong> in your Eventron account to complete checkout via Cashfree (UPI / Credit & Debit Cards / Net Banking).
+                        </p>
+                    </div>
+                </div>
+            </div>
+            """
+            text_body = f"Hello {recipient_name},\n\nYour registration for {event_title} {team_note_text} has been approved!\n\nPlease complete the registration fee payment of ₹{price} to confirm your ticket passes.\n\nComplete Payment here: https://eventron.xyz/myticket\n\nBest regards,\nEventron Team"
+
+        elif status == "APPROVED":
+            # Free event: Official confirmation
+            subject = f"🎉 Registration Confirmed: {team_subject_prefix}{event_title}"
+            html_body = f"""
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background-color: #f8fafc;">
+                <div style="background-color: #ffffff; border-radius: 20px; padding: 36px; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);">
+                    <div style="text-align: center; margin-bottom: 28px;">
+                        <span style="display: inline-block; padding: 6px 16px; background-color: #ecfdf5; color: #059669; border: 1px solid #a7f3d0; border-radius: 9999px; font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;">Official Confirmation</span>
+                        <h2 style="color: #0f172a; margin: 16px 0 8px 0; font-size: 24px; font-weight: 800;">You're Confirmed! 🎉</h2>
+                        <p style="color: #64748b; font-size: 14px; margin: 0;">Registration officially approved for {event_title}</p>
+                    </div>
+
+                    <div style="background-color: #f8fafc; border-radius: 14px; padding: 22px; border: 1px solid #e2e8f0; margin-bottom: 24px;">
+                        <p style="color: #334155; font-size: 15px; line-height: 1.6; margin: 0 0 12px 0;">
+                            Hello <strong>{recipient_name}</strong>,
+                        </p>
+                        <p style="color: #475569; font-size: 14px; line-height: 1.6; margin: 0 0 12px 0;">
+                            We are excited to inform you that your registration {team_bold_note} for <strong>{event_title}</strong> has been officially approved!
+                        </p>
+                        {team_badge}
+                        
+                        <div style="background: #ffffff; border-radius: 12px; padding: 16px; border: 1px solid #cbd5e1; margin-top: 14px;">
+                            {date_line}
+                            {location_line}
+                            <p style="margin: 4px 0; font-size: 13px; color: #059669; font-weight: 700;"><strong>🎟️ Admission:</strong> Confirmed (Free Entry)</p>
+                        </div>
+                    </div>
+
+                    <div style="text-align: center; margin: 32px 0;">
+                        <a href="https://eventron.xyz/myticket" style="display: inline-block; background: linear-gradient(135deg, #059669, #10b981); color: #ffffff; font-weight: 700; font-size: 14px; padding: 16px 36px; border-radius: 14px; text-decoration: none; box-shadow: 0 4px 15px rgba(5, 150, 105, 0.35);">
+                            View Tickets & Entry QR Code →
+                        </a>
+                    </div>
+
+                    <div style="border-top: 1px solid #f1f5f9; padding-top: 20px; text-align: center;">
+                        <p style="color: #94a3b8; font-size: 12px; line-height: 1.5; margin: 0;">
+                            Please present your digital QR pass from the <strong>My Tickets</strong> section upon arrival at the venue for check-in.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            """
+            text_body = f"Hello {recipient_name},\n\nYour registration for {event_title} {team_note_text} has been approved!\n\nYour ticket passes and QR check-in code are ready in the My Tickets tab: https://eventron.xyz/myticket\n\nBest regards,\nEventron Team"
+
+        else:
+            # Other status (e.g. REJECTED)
+            subject = f"Registration Update: {event_title}"
+            html_body = f"<p>Hello {recipient_name},</p><p>Your registration for <strong>{event_title}</strong> {('for team ' + team_name) if is_team else ''} has been updated to: <strong>{status}</strong>.</p>"
+            text_body = f"Hello {recipient_name},\n\nYour registration for {event_title} has been updated to {status}."
+
+        sent = await asyncio.to_thread(send_email_message, to_email, subject, html_body, text_body)
+        print(f"📧 [APPROVAL EMAIL] Status: {status} | To: {to_email} | Event: {event_title} | Sent: {sent}")
+        return {
+            "success": sent,
+            "message": f"Email {'sent successfully' if sent else 'failed to send'} to {to_email}",
+            "delivered": sent
+        }
+    except Exception as e:
+        print(f"❌ Send approval email error: {e}")
+        return Response(content=json.dumps({"success": False, "message": str(e)}), status_code=500, media_type="application/json")
 
 
 @app.post("/api/auth/email/send-delete-otp")
